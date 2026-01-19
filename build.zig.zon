@@ -37,8 +37,8 @@
             .hash = "lz4-0.1.0-fUqx0aNqAwAgCD6q9krWFpMsUwLWZ-NRuuTxmHMOaxoV",
         },
         .ultracdc = .{
-            .url = "https://github.com/jedisct1/zig-ultracdc/archive/refs/tags/0.1.1.tar.gz",
-            .hash = "ultracdc-0.1.0-vd07qbV2AAAUDCBiDEKMMVAZ7QUMgmjennH-W2KCIVck",
+            .url = "https://github.com/jedisct1/zig-ultracdc/archive/refs/tags/0.1.2.tar.gz",
+            .hash = "ultracdc-0.1.2-vd07qR94AACdcUsYVamB6e4yT5SR0AZKaz2NKQSvX821",
         },
     },
     .paths = .{
