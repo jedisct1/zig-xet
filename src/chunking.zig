@@ -1,11 +1,22 @@
-//! Gearhash Content-Defined Chunking (CDC)
+//! Content-Defined Chunking (CDC) with multiple algorithm support
 //!
-//! Rolling hash: h = (h << 1) + TABLE[byte] with wrapping arithmetic
-//! Boundary: (h & 0xFFFF000000000000) == 0
-//! Cut-point skipping: skip first (MIN - 65) bytes
+//! Gearhash (default for XET protocol):
+//!   Rolling hash: h = (h << 1) + TABLE[byte] with wrapping arithmetic
+//!   Boundary: (h & 0xFFFF000000000000) == 0
+//!   Cut-point skipping: skip first (MIN - 65) bytes
+//!
+//! UltraCDC (alternative):
+//!   Fast CDC using hamming distance-based boundary detection
+//!   Adaptive masking with low-entropy detection
 
 const std = @import("std");
 const constants = @import("constants.zig");
+const ultracdc = @import("ultracdc");
+
+pub const ChunkingAlgorithm = enum {
+    gearhash,
+    ultracdc,
+};
 
 pub const ChunkBoundary = struct {
     start: usize,
@@ -21,13 +32,19 @@ pub const Chunker = struct {
     position: usize,
     chunk_start: usize,
     first_chunk: bool,
+    algorithm: ChunkingAlgorithm,
 
     pub fn init() Chunker {
+        return initWithAlgorithm(.gearhash);
+    }
+
+    pub fn initWithAlgorithm(algorithm: ChunkingAlgorithm) Chunker {
         return .{
             .hash = 0,
             .position = 0,
             .chunk_start = 0,
             .first_chunk = true,
+            .algorithm = algorithm,
         };
     }
 
@@ -50,6 +67,13 @@ pub const Chunker = struct {
     }
 
     pub fn findNextChunk(self: *Chunker, data: []const u8) ?ChunkBoundary {
+        return switch (self.algorithm) {
+            .gearhash => self.findNextChunkGearhash(data),
+            .ultracdc => self.findNextChunkUltracdc(data),
+        };
+    }
+
+    fn findNextChunkGearhash(self: *Chunker, data: []const u8) ?ChunkBoundary {
         var offset: usize = 0;
 
         while (offset < data.len) : (offset += 1) {
@@ -75,6 +99,29 @@ pub const Chunker = struct {
         return null;
     }
 
+    fn findNextChunkUltracdc(self: *Chunker, data: []const u8) ?ChunkBoundary {
+        const remaining = data.len;
+        if (remaining == 0) return null;
+
+        const options = ultracdc.ChunkerOptions{
+            .min_size = constants.MinChunkSize,
+            .normal_size = constants.TargetChunkSize,
+            .max_size = constants.MaxChunkSize,
+        };
+
+        const cutpoint = ultracdc.UltraCDC.find(options, data, remaining);
+        if (cutpoint >= remaining) return null;
+
+        const boundary = ChunkBoundary{
+            .start = self.chunk_start,
+            .end = self.chunk_start + cutpoint,
+        };
+        self.position = self.chunk_start + cutpoint;
+        self.chunk_start = self.position;
+        self.first_chunk = false;
+        return boundary;
+    }
+
     pub fn finalize(self: *Chunker) ?ChunkBoundary {
         if (self.position > self.chunk_start) {
             const boundary = ChunkBoundary{
@@ -89,10 +136,14 @@ pub const Chunker = struct {
 };
 
 pub fn chunkBuffer(allocator: std.mem.Allocator, data: []const u8) !std.ArrayList(ChunkBoundary) {
+    return chunkBufferWithAlgorithm(allocator, data, .gearhash);
+}
+
+pub fn chunkBufferWithAlgorithm(allocator: std.mem.Allocator, data: []const u8, algorithm: ChunkingAlgorithm) !std.ArrayList(ChunkBoundary) {
     var chunks: std.ArrayList(ChunkBoundary) = .empty;
     errdefer chunks.deinit(allocator);
 
-    var chunker = Chunker.init();
+    var chunker = Chunker.initWithAlgorithm(algorithm);
     var offset: usize = 0;
 
     while (offset < data.len) {
@@ -212,4 +263,82 @@ test "max chunk size enforcement" {
     for (chunks.items[0 .. chunks.items.len - 1]) |chunk| {
         try std.testing.expectEqual(constants.MaxChunkSize, chunk.size());
     }
+}
+
+test "ultracdc chunker initialization" {
+    const chunker = Chunker.initWithAlgorithm(.ultracdc);
+    try std.testing.expectEqual(ChunkingAlgorithm.ultracdc, chunker.algorithm);
+    try std.testing.expectEqual(@as(usize, 0), chunker.position);
+    try std.testing.expectEqual(@as(usize, 0), chunker.chunk_start);
+}
+
+test "ultracdc deterministic chunking" {
+    const allocator = std.testing.allocator;
+
+    var data: [100000]u8 = undefined;
+    for (&data, 0..) |*byte, i| {
+        byte.* = @intCast(i % 256);
+    }
+
+    var chunks1 = try chunkBufferWithAlgorithm(allocator, &data, .ultracdc);
+    defer chunks1.deinit(allocator);
+
+    var chunks2 = try chunkBufferWithAlgorithm(allocator, &data, .ultracdc);
+    defer chunks2.deinit(allocator);
+
+    try std.testing.expectEqual(chunks1.items.len, chunks2.items.len);
+    for (chunks1.items, chunks2.items) |c1, c2| {
+        try std.testing.expectEqual(c1.start, c2.start);
+        try std.testing.expectEqual(c1.end, c2.end);
+    }
+}
+
+test "ultracdc chunk sizes are within bounds" {
+    const allocator = std.testing.allocator;
+
+    var data: [1024 * 1024]u8 = undefined;
+    var prng = std.Random.DefaultPrng.init(12345);
+    const random = prng.random();
+    random.bytes(&data);
+
+    var chunks = try chunkBufferWithAlgorithm(allocator, &data, .ultracdc);
+    defer chunks.deinit(allocator);
+
+    for (chunks.items, 0..) |chunk, i| {
+        const size = chunk.size();
+        if (i < chunks.items.len - 1) {
+            try std.testing.expect(size <= constants.MaxChunkSize);
+        }
+        try std.testing.expect(size > 0);
+    }
+}
+
+test "gearhash and ultracdc produce different boundaries" {
+    const allocator = std.testing.allocator;
+
+    var data: [500000]u8 = undefined;
+    var prng = std.Random.DefaultPrng.init(42);
+    const random = prng.random();
+    random.bytes(&data);
+
+    var gearhash_chunks = try chunkBufferWithAlgorithm(allocator, &data, .gearhash);
+    defer gearhash_chunks.deinit(allocator);
+
+    var ultracdc_chunks = try chunkBufferWithAlgorithm(allocator, &data, .ultracdc);
+    defer ultracdc_chunks.deinit(allocator);
+
+    try std.testing.expect(gearhash_chunks.items.len > 1);
+    try std.testing.expect(ultracdc_chunks.items.len > 1);
+
+    const counts_differ = gearhash_chunks.items.len != ultracdc_chunks.items.len;
+    var boundaries_differ = false;
+    if (!counts_differ and gearhash_chunks.items.len > 0) {
+        for (gearhash_chunks.items, ultracdc_chunks.items) |g, u| {
+            if (g.end != u.end) {
+                boundaries_differ = true;
+                break;
+            }
+        }
+    }
+    try std.testing.expect(counts_differ or boundaries_differ);
 }

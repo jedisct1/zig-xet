@@ -36,6 +36,10 @@
             .url = "https://github.com/jedisct1/zig-lz4/archive/refs/tags/0.1.1.tar.gz",
             .hash = "lz4-0.1.0-fUqx0aNqAwAgCD6q9krWFpMsUwLWZ-NRuuTxmHMOaxoV",
         },
+        .ultracdc = .{
+            .url = "https://github.com/jedisct1/zig-ultracdc/archive/refs/tags/0.1.1.tar.gz",
+            .hash = "ultracdc-0.1.0-vd07qbV2AAAUDCBiDEKMMVAZ7QUMgmjennH-W2KCIVck",
+        },
     },
     .paths = .{
         "build.zig",

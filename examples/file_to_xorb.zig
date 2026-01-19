@@ -44,6 +44,7 @@ const XorbCreator = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     compression_type: xet.constants.CompressionType,
+    chunking_algorithm: xet.chunking.ChunkingAlgorithm,
     max_xorb_size: usize,
     verbose: bool,
 
@@ -59,12 +60,14 @@ const XorbCreator = struct {
         allocator: std.mem.Allocator,
         io: std.Io,
         compression_type: xet.constants.CompressionType,
+        chunking_algorithm: xet.chunking.ChunkingAlgorithm,
         verbose: bool,
     ) XorbCreator {
         return .{
             .allocator = allocator,
             .io = io,
             .compression_type = compression_type,
+            .chunking_algorithm = chunking_algorithm,
             .max_xorb_size = xet.constants.MaxXorbSize,
             .verbose = verbose,
             .chunk_dedup = std.AutoHashMap(xet.hashing.Hash, ChunkLocation).init(allocator),
@@ -171,7 +174,7 @@ const XorbCreator = struct {
     }
 
     fn processFileHandle(self: *XorbCreator, file: std.Io.File) !FileProcessingResult {
-        var chunker = xet.chunking.Chunker.init();
+        var chunker = xet.chunking.Chunker.initWithAlgorithm(self.chunking_algorithm);
         var total_chunks: u32 = 0;
         var dedup_savings: u64 = 0;
         var bytes_read_total: u64 = 0;
@@ -308,14 +311,16 @@ fn printUsage(prog_name: []const u8, stderr: anytype) !void {
         \\  -o, --output <dir>    Output directory for xorb files (default: current directory)
         \\  -c, --compression <type>
         \\                        Compression type: none, lz4, bg4, fbs (default: lz4)
+        \\  -k, --chunking <alg>  Chunking algorithm: gearhash, ultracdc (default: gearhash)
         \\  -v, --verbose         Verbose output
         \\  -h, --help            Show this help message
         \\
         \\Examples:
         \\  {s} model.safetensors -o ./xorbs
         \\  {s} data.bin -c bg4 -v -o ./output
+        \\  {s} data.bin -k ultracdc -o ./output
         \\
-    , .{ prog_name, prog_name, prog_name });
+    , .{ prog_name, prog_name, prog_name, prog_name });
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -342,6 +347,7 @@ pub fn main(init: std.process.Init) !void {
     var input_file: ?[]const u8 = null;
     var output_dir: []const u8 = ".";
     var compression_type: xet.constants.CompressionType = .LZ4;
+    var chunking_algorithm: xet.chunking.ChunkingAlgorithm = .gearhash;
     var verbose = false;
 
     var i: usize = 1;
@@ -378,6 +384,22 @@ pub fn main(init: std.process.Init) !void {
                 try stderr.print("Valid types: none, lz4, bg4, fbs\n", .{});
                 return error.InvalidArgs;
             }
+        } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--chunking")) {
+            i += 1;
+            if (i >= args.items.len) {
+                try stderr.print("Error: --chunking requires an argument\n", .{});
+                return error.InvalidArgs;
+            }
+            const chunk_str = args.items[i];
+            if (std.mem.eql(u8, chunk_str, "gearhash")) {
+                chunking_algorithm = .gearhash;
+            } else if (std.mem.eql(u8, chunk_str, "ultracdc")) {
+                chunking_algorithm = .ultracdc;
+            } else {
+                try stderr.print("Error: Unknown chunking algorithm: {s}\n", .{chunk_str});
+                try stderr.print("Valid algorithms: gearhash, ultracdc\n", .{});
+                return error.InvalidArgs;
+            }
         } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
             verbose = true;
         } else if (arg[0] == '-') {
@@ -411,11 +433,12 @@ pub fn main(init: std.process.Init) !void {
     if (verbose) {
         try stdout.print("Processing: {s}\n", .{file_path});
         try stdout.print("Compression: {s}\n", .{@tagName(compression_type)});
+        try stdout.print("Chunking: {s}\n", .{@tagName(chunking_algorithm)});
         try stdout.print("Output directory: {s}\n\n", .{output_dir});
         try stdout.flush();
     }
 
-    var creator = XorbCreator.init(allocator, io, compression_type, verbose);
+    var creator = XorbCreator.init(allocator, io, compression_type, chunking_algorithm, verbose);
     defer creator.deinit();
 
     var result = try creator.processFile(file_path);

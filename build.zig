@@ -34,6 +34,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const ultracdc_dep = b.dependency("ultracdc", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const mod = b.addModule("xet", .{
         // The root source file is the "entry point" of this module. Users of
         // this module will only be able to access public declarations contained
@@ -47,8 +52,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    // Add zig-lz4 module import
+    // Add module imports
     mod.addImport("lz4", lz4_dep.module("lz4"));
+    mod.addImport("ultracdc", ultracdc_dep.module("ultracdc"));
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
