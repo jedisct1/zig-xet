@@ -135,7 +135,7 @@ pub fn main(init: std.process.Init) !void {
 
     try stdout.flush();
 
-    const start_time = try std.time.Instant.now();
+    const start_time = std.Io.Clock.Timestamp.now(io, .boot);
 
     xet.model_download.downloadModelToFile(allocator, io, init.minimal.environ, config, output_path) catch |err| {
         try stderr.print("\nError: Download failed: {}\n", .{err});
@@ -151,9 +151,9 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
-    const end_time = try std.time.Instant.now();
-    const elapsed_ns = end_time.since(start_time);
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / std.time.ns_per_ms;
+    const elapsed = start_time.untilNow(io);
+    const elapsed_ns: i96 = elapsed.raw.nanoseconds;
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, std.time.ns_per_ms);
     const elapsed_s = elapsed_ms / 1000.0;
 
     const output_file = try std.Io.Dir.openFile(.cwd(), io, output_path, .{});

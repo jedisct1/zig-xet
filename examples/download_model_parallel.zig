@@ -121,7 +121,7 @@ pub fn main(init: std.process.Init) !void {
     const file = selected_file.?;
     const file_hash_hex = file.xet_hash.?;
 
-    const output_path = std.fs.path.basename(file.path);
+    const output_path = std.Io.Dir.path.basename(file.path);
 
     std.debug.print("\nDownloading with parallel fetching...\n", .{});
     std.debug.print("  Repository: {s}\n", .{repo_id});
@@ -136,7 +136,7 @@ pub fn main(init: std.process.Init) !void {
         .file_hash_hex = file_hash_hex,
     };
 
-    var timer = try std.time.Timer.start();
+    const start_time = std.Io.Clock.Timestamp.now(init.io, .boot);
 
     const download_io = init.io;
 
@@ -149,8 +149,8 @@ pub fn main(init: std.process.Init) !void {
         false,
     );
 
-    const duration_ns = timer.read();
-    const duration_ms = duration_ns / 1_000_000;
+    const elapsed = start_time.untilNow(init.io);
+    const duration_ms: i64 = elapsed.raw.toMilliseconds();
 
     std.debug.print("\nDownload complete!\n", .{});
     std.debug.print("  Time: {d}ms\n", .{duration_ms});

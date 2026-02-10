@@ -24,16 +24,17 @@ pub const ChunkResult = struct {
 /// Context for a single chunk fetch operation
 const ChunkFetchContext = struct {
     allocator: Allocator,
+    io: std.Io,
     http_client: *std.http.Client,
     term: cas_client.ReconstructionTerm,
     fetch_info: []cas_client.FetchInfo,
     index: usize,
     compute_hashes: bool,
     results: []?ChunkResult,
-    mutex: *std.Thread.Mutex,
+    mutex: *std.Io.Mutex,
     error_occurred: *std.atomic.Value(bool),
     first_error: *?anyerror,
-    error_mutex: *std.Thread.Mutex,
+    error_mutex: *std.Io.Mutex,
 };
 
 /// Fetch data from a presigned URL
@@ -79,8 +80,8 @@ fn processChunk(ctx: *ChunkFetchContext) void {
     if (ctx.error_occurred.load(.acquire)) return;
 
     const result = processChunkInner(ctx) catch |err| {
-        ctx.error_mutex.lock();
-        defer ctx.error_mutex.unlock();
+        ctx.error_mutex.lockUncancelable(ctx.io);
+        defer ctx.error_mutex.unlock(ctx.io);
 
         if (ctx.first_error.* == null) {
             ctx.first_error.* = err;
@@ -89,8 +90,8 @@ fn processChunk(ctx: *ChunkFetchContext) void {
         return;
     };
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    ctx.mutex.lockUncancelable(ctx.io);
+    defer ctx.mutex.unlock(ctx.io);
     ctx.results[ctx.index] = result;
 }
 
@@ -169,10 +170,10 @@ pub const ParallelFetcher = struct {
         defer self.allocator.free(results);
         @memset(results, null);
 
-        var mutex = std.Thread.Mutex{};
+        var mutex: std.Io.Mutex = .init;
         var error_occurred = std.atomic.Value(bool).init(false);
         var first_error: ?anyerror = null;
-        var error_mutex = std.Thread.Mutex{};
+        var error_mutex: std.Io.Mutex = .init;
 
         const contexts = try self.allocator.alloc(ChunkFetchContext, terms.len);
         defer self.allocator.free(contexts);
@@ -185,6 +186,7 @@ pub const ParallelFetcher = struct {
 
             contexts[i] = .{
                 .allocator = self.allocator,
+                .io = self.io,
                 .http_client = self.http_client,
                 .term = term,
                 .fetch_info = fetch_infos,
