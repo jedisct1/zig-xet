@@ -6,7 +6,7 @@ const constants = @import("constants.zig");
 const hashing = @import("hashing.zig");
 const compression = @import("compression.zig");
 
-pub const ChunkHeader = packed struct {
+pub const ChunkHeader = extern struct {
     version: u8,
     compressed_size_low: u8,
     compressed_size_mid: u8,
@@ -156,7 +156,7 @@ pub const XorbReader = struct {
         if (self.position + constants.XorbChunkHeaderSize > self.data.len) return error.TruncatedXorb;
 
         const header_bytes = self.data[self.position .. self.position + constants.XorbChunkHeaderSize];
-        const header: ChunkHeader = @bitCast(header_bytes[0..@sizeOf(ChunkHeader)].*);
+        const header = std.mem.bytesToValue(ChunkHeader, header_bytes[0..@sizeOf(ChunkHeader)]);
 
         if (header.version != constants.XorbVersion) return error.UnsupportedVersion;
 
