@@ -14,13 +14,15 @@ It's particularly useful for managing large models and datasets, like those host
 
 This library implements the full XET protocol spec in Zig, including:
 
-- Content-defined chunking using the Gearhash algorithm (chunks are between 8KB-128KB)
-- LZ4 compression with byte grouping optimization and experimental bit grouping
+- Content-defined chunking using Gearhash or UltraCDC algorithms (chunks are between 8KB-128KB)
+- LZ4 compression with byte grouping and bitslice optimizations
 - Merkle tree construction for efficient file verification
 - Xorb format for serializing chunked data
 - MDB shard format for metadata storage
-- CAS client for downloading files from HuggingFace
-- Parallel chunk fetching, decompression, and hashing using thread pools
+- CAS client for uploading and downloading files from HuggingFace
+- HuggingFace Bucket API support
+- High-level upload and download pipelines
+- Parallel chunk fetching using concurrent I/O
 
 The implementation has been cross-verified against the Rust reference implementation to ensure correctness.
 
@@ -39,7 +41,7 @@ It can be compiled to WebAssembly, but runs at about 45% of the non-threaded nat
 # Build the project
 zig build
 
-# Run tests (98 tests covering all components)
+# Run tests
 zig build test
 
 # Run the demo CLI
@@ -64,7 +66,7 @@ zig build run-example-download
 zig build run-example-parallel
 ```
 
-The parallel version uses multiple threads to fetch, decompress, and hash chunks simultaneously, providing significant performance improvements for large models.
+The parallel version uses concurrent I/O to fetch, decompress, and hash chunks simultaneously, providing significant performance improvements for large models.
 
 ### Using as a library
 
@@ -73,7 +75,7 @@ Add to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .xet = .{
-        .url = "https://github.com/yourusername/zig-xet/archive/main.tar.gz",
+        .url = "https://github.com/jedisct1/zig-xet/archive/main.tar.gz",
     },
 },
 ```
@@ -94,27 +96,22 @@ const hash = xet.hashing.computeDataHash(chunk_data);
 // Build a Merkle tree for verification
 const merkle_root = try xet.hashing.buildMerkleTree(allocator, &nodes);
 
-// Download a model from HuggingFace (sequential)
-var io_instance = std.Io.Threaded.init(allocator);
-defer io_instance.deinit();
-const io = io_instance.io();
-
+// Download a model from HuggingFace
 const config = xet.model_download.DownloadConfig{
     .repo_id = "org/model",
-    .repo_type = "model",
-    .revision = "main",
     .file_hash_hex = "...",
 };
-try xet.model_download.downloadModelToFile(allocator, io, config, "output.gguf");
+try xet.model_download.downloadModelToFile(allocator, io, environ, config, "output.gguf");
 
 // Or download with parallel fetching (faster for large files)
 try xet.model_download.downloadModelToFileParallel(
-    allocator,
-    io,
-    config,
-    "output.gguf",
-    false, // Don't compute hashes during download
+    allocator, io, environ, config, "output.gguf", false,
 );
+
+// Upload data to CAS
+var cas = try xet.cas_client.CasClient.init(allocator, io, cas_url, token);
+defer cas.deinit();
+const result = try xet.upload.uploadData(allocator, &cas, data);
 ```
 
 ## How it works
@@ -131,16 +128,19 @@ The XET protocol processes files in several stages:
 
 5. Storage: Chunks are bundled into "xorbs" and metadata is stored in "MDB shards" for efficient retrieval.
 
-When downloading from HuggingFace, the library queries the CAS (content-addressable storage) API to find which chunks are needed, fetches them (optionally in parallel using a thread pool), decompresses, and reconstructs the original file.
+When downloading from HuggingFace, the library queries the CAS (content-addressable storage) API to find which chunks are needed, fetches them (optionally in parallel using concurrent I/O), decompresses, and reconstructs the original file.
+
+Uploading works in reverse: data is chunked, hashed, compressed into xorbs, and uploaded to CAS along with shard metadata.
 
 ### Performance
 
-The parallel fetching implementation uses a thread pool to simultaneously:
+The parallel fetching implementation uses concurrent I/O to simultaneously:
+
 - Download chunks via HTTP
 - Decompress chunks
 - Compute BLAKE3 hashes
 
-This provides significant speedup for large models, especially on multi-core systems with good network bandwidth.
+This provides significant speedup for large models, especially with good network bandwidth.
 
 ## Protocol compliance
 

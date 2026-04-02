@@ -35,6 +35,8 @@ pub const has_network_support = builtin.target.os.tag != .wasi;
 pub const cas_client = if (has_network_support) @import("cas_client.zig") else struct {};
 pub const model_download = if (has_network_support) @import("model_download.zig") else struct {};
 pub const parallel_fetcher = if (has_network_support) @import("parallel_fetcher.zig") else struct {};
+pub const upload = if (has_network_support) @import("upload.zig") else struct {};
+pub const bucket_api = if (has_network_support) @import("bucket_api.zig") else struct {};
 
 test {
     std.testing.refAllDecls(@This());

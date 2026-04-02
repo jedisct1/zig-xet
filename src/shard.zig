@@ -201,9 +201,29 @@ pub const ShardBuilder = struct {
         file_hash: hashing.Hash,
         entries: []const FileDataSequenceEntry,
     ) !void {
+        try self.addFileInfoEx(file_hash, entries, 0, null);
+    }
+
+    pub fn addFileInfoWithVerification(
+        self: *ShardBuilder,
+        file_hash: hashing.Hash,
+        entries: []const FileDataSequenceEntry,
+        chunk_hashes: []const hashing.Hash,
+    ) !void {
+        const range_hash = computeVerificationHash(chunk_hashes);
+        try self.addFileInfoEx(file_hash, entries, 0x80000000, &range_hash);
+    }
+
+    fn addFileInfoEx(
+        self: *ShardBuilder,
+        file_hash: hashing.Hash,
+        entries: []const FileDataSequenceEntry,
+        file_flags: u32,
+        verification_hash: ?*const hashing.Hash,
+    ) !void {
         const header = FileDataSequenceHeader{
             .file_hash = file_hash,
-            .file_flags = 0,
+            .file_flags = file_flags,
             .entry_count = @intCast(entries.len),
             .reserved = @splat(0),
         };
@@ -211,6 +231,14 @@ pub const ShardBuilder = struct {
 
         for (entries) |entry| {
             try self.file_info.appendSlice(self.allocator, std.mem.asBytes(&entry));
+        }
+
+        if (verification_hash) |vh| {
+            const verification = FileVerificationEntry{
+                .range_hash = vh.*,
+                .reserved = @splat(0),
+            };
+            try self.file_info.appendSlice(self.allocator, std.mem.asBytes(&verification));
         }
     }
 
@@ -407,6 +435,10 @@ pub const ShardReader = struct {
         return self.footer.creation_timestamp;
     }
 };
+
+pub fn computeVerificationHash(chunk_hashes: []const hashing.Hash) hashing.Hash {
+    return hashing.computeVerificationHash(std.mem.sliceAsBytes(chunk_hashes));
+}
 
 test "shard header size" {
     try std.testing.expectEqual(48, @sizeOf(ShardHeader));
