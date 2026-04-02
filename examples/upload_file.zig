@@ -26,6 +26,7 @@ pub fn main(init: std.process.Init) !void {
     var bucket_id: ?[]const u8 = null;
     var remote_path: ?[]const u8 = null;
     var compression_type: xet.constants.CompressionType = .LZ4;
+    var chunking_algorithm: xet.chunking.ChunkingAlgorithm = .gearhash;
 
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
@@ -53,6 +54,22 @@ pub fn main(init: std.process.Init) !void {
                 try stderr.print("Valid types: none, lz4, bg4, fbs\n", .{});
                 return error.InvalidArgs;
             };
+        } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--chunking")) {
+            i += 1;
+            if (i >= args.items.len) {
+                try stderr.print("Error: --chunking requires an argument\n", .{});
+                return error.InvalidArgs;
+            }
+            const chunk_str = args.items[i];
+            if (std.mem.eql(u8, chunk_str, "gearhash")) {
+                chunking_algorithm = .gearhash;
+            } else if (std.mem.eql(u8, chunk_str, "ultracdc")) {
+                chunking_algorithm = .ultracdc;
+            } else {
+                try stderr.print("Error: Unknown chunking algorithm: {s}\n", .{chunk_str});
+                try stderr.print("Valid algorithms: gearhash, ultracdc\n", .{});
+                return error.InvalidArgs;
+            }
         } else if (arg.len > 0 and arg[0] == '-') {
             try stderr.print("Error: Unknown option: {s}\n", .{arg});
             try printUsage(args.items[0], stderr);
@@ -91,7 +108,8 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("Bucket:      {s}\n", .{bucket});
     try stdout.print("Local file:  {s}\n", .{path});
     try stdout.print("Remote path: {s}\n", .{remote});
-    try stdout.print("Compression: {s}\n\n", .{@tagName(compression_type)});
+    try stdout.print("Compression: {s}\n", .{@tagName(compression_type)});
+    try stdout.print("Chunking:    {s}\n\n", .{@tagName(chunking_algorithm)});
     try stdout.flush();
 
     const start_time = std.Io.Clock.Timestamp.now(io, .boot);
@@ -147,7 +165,7 @@ pub fn main(init: std.process.Init) !void {
     var cas = try xet.cas_client.CasClient.init(allocator, io, connection.cas_url, connection.access_token);
     defer cas.deinit();
 
-    const result = xet.upload.uploadDataWithCompression(allocator, &cas, file_data, compression_type) catch |err| {
+    const result = xet.upload.uploadDataWithOptions(allocator, &cas, file_data, compression_type, chunking_algorithm) catch |err| {
         try stderr.print("Error: Upload failed: {}\n", .{err});
         return err;
     };
@@ -191,6 +209,7 @@ fn printUsage(prog_name: []const u8, writer: anytype) !void {
         \\                        Remote file path in bucket (default: filename)
         \\  -c, --compression <type>
         \\                        Compression type: none, lz4, bg4, fbs (default: lz4)
+        \\  -k, --chunking <alg>  Chunking algorithm: gearhash, ultracdc (default: gearhash)
         \\  -h, --help            Show this help message
         \\
         \\Environment:
@@ -200,6 +219,7 @@ fn printUsage(prog_name: []const u8, writer: anytype) !void {
         \\  HF_TOKEN=hf_xxx {s} user/my-repo model.safetensors
         \\  HF_TOKEN=hf_xxx {s} user/my-repo data.bin -r models/data.bin
         \\  HF_TOKEN=hf_xxx {s} user/my-repo data.bin -c bg4
+        \\  HF_TOKEN=hf_xxx {s} user/my-repo data.bin -k ultracdc
         \\
-    , .{ prog_name, prog_name, prog_name, prog_name });
+    , .{ prog_name, prog_name, prog_name, prog_name, prog_name });
 }

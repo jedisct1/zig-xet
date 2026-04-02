@@ -18,7 +18,7 @@ pub fn uploadData(
     cas: *cas_client.CasClient,
     data: []const u8,
 ) !UploadResult {
-    return uploadDataWithCompression(allocator, cas, data, .LZ4);
+    return uploadDataWithOptions(allocator, cas, data, .LZ4, .gearhash);
 }
 
 pub fn uploadDataWithCompression(
@@ -27,9 +27,19 @@ pub fn uploadDataWithCompression(
     data: []const u8,
     compression_type: constants.CompressionType,
 ) !UploadResult {
+    return uploadDataWithOptions(allocator, cas, data, compression_type, .gearhash);
+}
+
+pub fn uploadDataWithOptions(
+    allocator: Allocator,
+    cas: *cas_client.CasClient,
+    data: []const u8,
+    compression_type: constants.CompressionType,
+    chunking_algorithm: chunking.ChunkingAlgorithm,
+) !UploadResult {
     if (data.len == 0) return error.EmptyData;
 
-    var chunks = try chunking.chunkBuffer(allocator, data);
+    var chunks = try chunking.chunkBufferWithAlgorithm(allocator, data, chunking_algorithm);
     defer chunks.deinit(allocator);
 
     var xorb_builder = xorb.XorbBuilder.init(allocator);
@@ -105,24 +115,16 @@ fn buildUploadShard(
     const cas_entries = try allocator.alloc(shard.CASChunkSequenceEntry, chunk_hashes.len);
     defer allocator.free(cas_entries);
 
-    var byte_offset: u32 = 0;
+    var raw_offset: u32 = 0;
     for (chunk_hashes, chunk_sizes, 0..) |chunk_hash, chunk_size, i| {
-        var compressed_size: u32 = 0;
-        const header_end = byte_offset + @sizeOf(xorb.ChunkHeader);
-        if (header_end <= xorb_data.len) {
-            const header_bytes = xorb_data[byte_offset..][0..@sizeOf(xorb.ChunkHeader)];
-            const header = std.mem.bytesToValue(xorb.ChunkHeader, header_bytes);
-            compressed_size = @intCast(header.getCompressedSize());
-        }
-
         cas_entries[i] = .{
             .chunk_hash = chunk_hash,
-            .byte_range_start = byte_offset,
+            .byte_range_start = raw_offset,
             .unpacked_segment_size = chunk_size,
             .reserved = @splat(0),
         };
 
-        byte_offset += @sizeOf(xorb.ChunkHeader) + compressed_size;
+        raw_offset += chunk_size;
     }
 
     try builder.addCASInfo(
