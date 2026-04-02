@@ -249,6 +249,30 @@ pub fn build(b: *std.Build) void {
         if (b.args) |args| {
             run_file_to_xorb.addArgs(args);
         }
+
+        // Tool: Upload file to HuggingFace using XET protocol
+        const upload_file = b.addExecutable(.{
+            .name = "upload_file",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/upload_file.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "xet", .module = mod },
+                },
+            }),
+        });
+
+        b.installArtifact(upload_file);
+
+        const upload_step = b.step("run-example-upload", "Upload a file to HuggingFace using XET protocol (requires HF_TOKEN env var)");
+        const run_upload = b.addRunArtifact(upload_file);
+        upload_step.dependOn(&run_upload.step);
+        run_upload.step.dependOn(b.getInstallStep());
+
+        if (b.args) |args| {
+            run_upload.addArgs(args);
+        }
     }
 
     // Just like flags, top level steps are also listed in the `--help` menu.

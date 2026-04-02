@@ -371,19 +371,11 @@ pub fn main(init: std.process.Init) !void {
                 return error.InvalidArgs;
             }
             const comp_str = args.items[i];
-            if (std.mem.eql(u8, comp_str, "none")) {
-                compression_type = .None;
-            } else if (std.mem.eql(u8, comp_str, "lz4")) {
-                compression_type = .LZ4;
-            } else if (std.mem.eql(u8, comp_str, "bg4")) {
-                compression_type = .ByteGrouping4LZ4;
-            } else if (std.mem.eql(u8, comp_str, "fbs")) {
-                compression_type = .FullBitsliceLZ4;
-            } else {
+            compression_type = xet.constants.CompressionType.fromString(comp_str) orelse {
                 try stderr.print("Error: Unknown compression type: {s}\n", .{comp_str});
                 try stderr.print("Valid types: none, lz4, bg4, fbs\n", .{});
                 return error.InvalidArgs;
-            }
+            };
         } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--chunking")) {
             i += 1;
             if (i >= args.items.len) {

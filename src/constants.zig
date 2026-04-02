@@ -122,6 +122,19 @@ pub const CompressionType = enum(u8) {
     ByteGrouping4LZ4 = 2,
     /// Full bitslice (bit-plane interleaving) followed by LZ4
     FullBitsliceLZ4 = 3,
+
+    pub fn fromString(s: []const u8) ?CompressionType {
+        const map = .{
+            .{ "none", CompressionType.None },
+            .{ "lz4", CompressionType.LZ4 },
+            .{ "bg4", CompressionType.ByteGrouping4LZ4 },
+            .{ "fbs", CompressionType.FullBitsliceLZ4 },
+        };
+        inline for (map) |entry| {
+            if (std.mem.eql(u8, s, entry[0])) return entry[1];
+        }
+        return null;
+    }
 };
 
 /// MDB shard header size in bytes
