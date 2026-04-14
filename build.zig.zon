@@ -34,7 +34,11 @@
     .dependencies = .{
         .lz4 = .{
             .url = "https://github.com/jedisct1/zig-lz4/archive/refs/tags/0.1.2.tar.gz",
-            .hash = "lz4-0.1.0-fUqx0Y9oAwCZ5nNa9i0T2sVUEU_YD2pYfKAw9ONQKW8p",
+            .hash = "lz4-0.1.2-fUqx0Y9oAwBZn6riH_Br9lGJGBR0c8pVsmGB9L8fwWT_",
+        },
+        .hctr2 = .{
+            .url = "https://github.com/jedisct1/zig-hctr2/archive/refs/tags/0.1.8.tar.gz",
+            .hash = "hctr2-0.1.6-mu7McdIoAwB4BY7OgLazIChsNvSpyMLbTRgx2Et68FYd",
         },
         .ultracdc = .{
             .url = "https://github.com/jedisct1/zig-ultracdc/archive/refs/tags/0.1.3.tar.gz",
