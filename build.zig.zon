@@ -33,12 +33,12 @@
     // internet connectivity.
     .dependencies = .{
         .lz4 = .{
-            .url = "https://github.com/jedisct1/zig-lz4/archive/refs/tags/0.1.1.tar.gz",
-            .hash = "lz4-0.1.0-fUqx0aNqAwAgCD6q9krWFpMsUwLWZ-NRuuTxmHMOaxoV",
+            .url = "https://github.com/jedisct1/zig-lz4/archive/refs/tags/0.1.2.tar.gz",
+            .hash = "lz4-0.1.0-fUqx0Y9oAwCZ5nNa9i0T2sVUEU_YD2pYfKAw9ONQKW8p",
         },
         .ultracdc = .{
-            .url = "https://github.com/jedisct1/zig-ultracdc/archive/refs/tags/0.1.2.tar.gz",
-            .hash = "ultracdc-0.1.2-vd07qR94AACdcUsYVamB6e4yT5SR0AZKaz2NKQSvX821",
+            .url = "https://github.com/jedisct1/zig-ultracdc/archive/refs/tags/0.1.3.tar.gz",
+            .hash = "ultracdc-0.1.2-vd07qRt4AAC8AGdSmhQgrXzNSryUgGAf9nRubypS_6T9",
         },
     },
     .paths = .{
