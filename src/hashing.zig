@@ -134,7 +134,7 @@ fn mergedHashOfSequence(allocator: std.mem.Allocator, nodes: []const MerkleNode)
 
 pub fn buildMerkleTree(allocator: std.mem.Allocator, chunks: []const MerkleNode) !Hash {
     if (chunks.len == 0) {
-        return [_]u8{0} ** constants.HashSize;
+        return @splat(0);
     }
 
     if (chunks.len == 1) {
