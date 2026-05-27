@@ -126,10 +126,7 @@ pub fn build(b: *std.Build) void {
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
+    run_cmd.addPassthruArgs();
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
@@ -222,10 +219,7 @@ pub fn build(b: *std.Build) void {
         download_parallel_step.dependOn(&run_download_parallel.step);
         run_download_parallel.step.dependOn(b.getInstallStep());
 
-        if (b.args) |args| {
-            run_download_parallel.addArgs(args);
-        }
-
+        run_download_parallel.addPassthruArgs();
         // Tool: Convert file to xorb format
         const file_to_xorb = b.addExecutable(.{
             .name = "file_to_xorb",
@@ -246,10 +240,7 @@ pub fn build(b: *std.Build) void {
         file_to_xorb_step.dependOn(&run_file_to_xorb.step);
         run_file_to_xorb.step.dependOn(b.getInstallStep());
 
-        if (b.args) |args| {
-            run_file_to_xorb.addArgs(args);
-        }
-
+        run_file_to_xorb.addPassthruArgs();
         // Tool: Upload file to HuggingFace using XET protocol
         const upload_file = b.addExecutable(.{
             .name = "upload_file",
@@ -270,9 +261,7 @@ pub fn build(b: *std.Build) void {
         upload_step.dependOn(&run_upload.step);
         run_upload.step.dependOn(b.getInstallStep());
 
-        if (b.args) |args| {
-            run_upload.addArgs(args);
-        }
+        run_upload.addPassthruArgs();
     }
 
     // Just like flags, top level steps are also listed in the `--help` menu.
