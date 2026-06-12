@@ -18,42 +18,33 @@ pub const CompressionResult = struct {
 };
 
 fn lz4FrameCompress(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
-    // Calculate maximum output size
     const max_size = lz4.lz4f.compressFrameBound(data.len, null);
     const compressed_buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(compressed_buffer);
 
-    // Compress frame
     const compressed_size = lz4.lz4f.compressFrame(
         allocator,
         data,
         compressed_buffer,
         null,
-    ) catch |err| {
-        return switch (err) {
-            error.DstMaxSizeTooSmall => error.CompressionFailed,
-            else => error.CompressionFailed,
-        };
-    };
+    ) catch return error.CompressionFailed;
 
-    // Resize to actual size
-    const result = try allocator.realloc(compressed_buffer, compressed_size);
-    return result;
+    return allocator.realloc(compressed_buffer, compressed_size);
 }
 
+/// Compress `payload` with LZ4. If that does not shrink below `original.len`,
+/// fall back to a copy of `original` (the untransformed bytes) tagged as `.None`.
 fn compressLZ4(
     allocator: std.mem.Allocator,
-    data: []const u8,
-    original_size: usize,
+    payload: []const u8,
+    original: []const u8,
     compression_type: constants.CompressionType,
 ) !CompressionResult {
-    const compressed_data = try lz4FrameCompress(allocator, data);
-    const final_size = compressed_data.len;
+    const compressed_data = try lz4FrameCompress(allocator, payload);
 
-    if (final_size >= original_size) {
+    if (compressed_data.len >= original.len) {
         allocator.free(compressed_data);
-        const result = try allocator.dupe(u8, data);
-        return .{ .data = result, .type = .None };
+        return .{ .data = try allocator.dupe(u8, original), .type = .None };
     }
 
     return .{ .data = compressed_data, .type = compression_type };
@@ -66,68 +57,35 @@ pub fn compress(
 ) !CompressionResult {
     switch (compression_type) {
         .None => {
-            const result = try allocator.dupe(u8, data);
-            return .{ .data = result, .type = .None };
+            return .{ .data = try allocator.dupe(u8, data), .type = .None };
         },
         .LZ4 => {
-            return compressLZ4(allocator, data, data.len, .LZ4);
+            return compressLZ4(allocator, data, data, .LZ4);
         },
         .ByteGrouping4LZ4 => {
             const grouped = try applyByteGrouping(allocator, data);
             defer allocator.free(grouped);
-
-            const compressed_data = try lz4FrameCompress(allocator, grouped);
-            const final_size = compressed_data.len;
-
-            if (final_size >= data.len) {
-                allocator.free(compressed_data);
-                // Fall back to uncompressed, but keep bytes in original (ungrouped) order.
-                const result = try allocator.dupe(u8, data);
-                return .{ .data = result, .type = .None };
-            }
-
-            return .{ .data = compressed_data, .type = .ByteGrouping4LZ4 };
+            return compressLZ4(allocator, grouped, data, .ByteGrouping4LZ4);
         },
         .FullBitsliceLZ4 => {
             const bitsliced = try applyFullBitslice(allocator, data);
             defer allocator.free(bitsliced);
-
-            const compressed_data = try lz4FrameCompress(allocator, bitsliced);
-            const final_size = compressed_data.len;
-
-            if (final_size >= data.len) {
-                allocator.free(compressed_data);
-                // Fall back to uncompressed, but keep bytes in original (unsliced) order.
-                const result = try allocator.dupe(u8, data);
-                return .{ .data = result, .type = .None };
-            }
-
-            return .{ .data = compressed_data, .type = .FullBitsliceLZ4 };
+            return compressLZ4(allocator, bitsliced, data, .FullBitsliceLZ4);
         },
     }
 }
 
 fn lz4FrameDecompress(allocator: std.mem.Allocator, data: []const u8, expected_size: usize) ![]u8 {
-    // Allocate output buffer based on expected size
     const decompressed_buffer = try allocator.alloc(u8, expected_size);
     errdefer allocator.free(decompressed_buffer);
 
-    // Decompress frame
     const decompressed_size = lz4.lz4f.decompressFrame(
         allocator,
         data,
         decompressed_buffer,
-    ) catch |err| {
-        return switch (err) {
-            else => error.DecompressionFailed,
-        };
-    };
+    ) catch return error.DecompressionFailed;
 
-    // Verify size matches expected
-    if (decompressed_size != expected_size) {
-        allocator.free(decompressed_buffer);
-        return error.InvalidUncompressedSize;
-    }
+    if (decompressed_size != expected_size) return error.InvalidUncompressedSize;
 
     return decompressed_buffer;
 }
@@ -143,20 +101,20 @@ pub fn decompress(
             if (data.len != uncompressed_size) {
                 return error.InvalidUncompressedSize;
             }
-            return try allocator.dupe(u8, data);
+            return allocator.dupe(u8, data);
         },
         .LZ4 => {
-            return try lz4FrameDecompress(allocator, data, uncompressed_size);
+            return lz4FrameDecompress(allocator, data, uncompressed_size);
         },
         .ByteGrouping4LZ4 => {
             const lz4_decompressed = try lz4FrameDecompress(allocator, data, uncompressed_size);
             defer allocator.free(lz4_decompressed);
-            return try reverseByteGrouping(allocator, lz4_decompressed);
+            return reverseByteGrouping(allocator, lz4_decompressed);
         },
         .FullBitsliceLZ4 => {
             const lz4_decompressed = try lz4FrameDecompress(allocator, data, uncompressed_size);
             defer allocator.free(lz4_decompressed);
-            return try reverseFullBitslice(allocator, lz4_decompressed);
+            return reverseFullBitslice(allocator, lz4_decompressed);
         },
     }
 }
@@ -227,11 +185,8 @@ pub fn reverseByteGrouping(allocator: std.mem.Allocator, data: []const u8) ![]u8
 pub fn applyFullBitslice(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     const result = try allocator.alloc(u8, data.len);
     errdefer allocator.free(result);
-    @memset(result, 0);
 
     const n = data.len;
-    if (n == 0) return result;
-
     for (0..n) |out_byte_idx| {
         var out_byte: u8 = 0;
         for (0..8) |out_bit_idx| {
@@ -352,15 +307,12 @@ test "LZ4 compression and decompression" {
     const original = base_str ++ base_str ++ base_str ++ base_str ++ base_str ++
         base_str ++ base_str ++ base_str ++ base_str ++ base_str;
 
-    // Compress
     const compressed_result = try compress(allocator, original, .LZ4);
     defer allocator.free(compressed_result.data);
 
-    // Verify compression reduced size
     try std.testing.expect(compressed_result.data.len < original.len);
     try std.testing.expectEqual(constants.CompressionType.LZ4, compressed_result.type);
 
-    // Decompress
     const decompressed = try decompress(
         allocator,
         compressed_result.data,
@@ -369,7 +321,6 @@ test "LZ4 compression and decompression" {
     );
     defer allocator.free(decompressed);
 
-    // Verify round trip
     try std.testing.expectEqualSlices(u8, original, decompressed);
 }
 
@@ -378,11 +329,9 @@ test "LZ4 with incompressible data" {
     var prng = std.Random.DefaultPrng.init(12345);
     const random = prng.random();
 
-    // Generate random data (hard to compress)
     var data: [100]u8 = undefined;
     random.bytes(&data);
 
-    // Try to compress
     const result = try compress(allocator, &data, .LZ4);
     defer allocator.free(result.data);
 
@@ -399,7 +348,6 @@ test "ByteGrouping4LZ4 compression and decompression" {
         base_pattern ++ base_pattern ++ base_pattern ++ base_pattern ++ base_pattern ++
         base_pattern ++ base_pattern ++ base_pattern ++ base_pattern ++ base_pattern;
 
-    // Compress
     const compressed_result = try compress(allocator, &pattern, .ByteGrouping4LZ4);
     defer allocator.free(compressed_result.data);
 
@@ -407,7 +355,6 @@ test "ByteGrouping4LZ4 compression and decompression" {
     try std.testing.expect(compressed_result.data.len < pattern.len);
     try std.testing.expectEqual(constants.CompressionType.ByteGrouping4LZ4, compressed_result.type);
 
-    // Decompress
     const decompressed = try decompress(
         allocator,
         compressed_result.data,
@@ -416,7 +363,6 @@ test "ByteGrouping4LZ4 compression and decompression" {
     );
     defer allocator.free(decompressed);
 
-    // Verify round trip
     try std.testing.expectEqualSlices(u8, &pattern, decompressed);
 }
 
@@ -436,7 +382,6 @@ test "LZ4 compression with small data" {
     const allocator = std.testing.allocator;
     const original = "Hi";
 
-    // Compress
     const compressed_result = try compress(allocator, original, .LZ4);
     defer allocator.free(compressed_result.data);
 
@@ -449,7 +394,6 @@ test "LZ4 compression with small data" {
     );
     defer allocator.free(decompressed);
 
-    // Verify round trip works
     try std.testing.expectEqualSlices(u8, original, decompressed);
 }
 
@@ -553,7 +497,6 @@ test "ByteGrouping4LZ4 with model-like data" {
     // ByteGrouping4LZ4 should compress better for this pattern
     try std.testing.expect(bg4_result.data.len < lz4_result.data.len);
 
-    // Verify decompression works correctly
     const decompressed = try decompress(
         allocator,
         bg4_result.data,

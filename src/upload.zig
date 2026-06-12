@@ -63,9 +63,9 @@ pub fn uploadDataWithOptions(
     const chunk_sizes = try allocator.alloc(u32, built_chunks.len);
     defer allocator.free(chunk_sizes);
 
-    for (built_chunks, 0..) |chunk, i| {
-        chunk_hashes[i] = chunk.hash;
-        chunk_sizes[i] = @intCast(chunk.data.len);
+    for (built_chunks, chunk_hashes, chunk_sizes) |chunk, *hash, *size| {
+        hash.* = chunk.hash;
+        size.* = @intCast(chunk.data.len);
     }
 
     const shard_data = try buildUploadShard(
@@ -102,7 +102,7 @@ fn buildUploadShard(
 
     try builder.addFileInfoWithVerification(
         file_hash,
-        &.{shard.FileDataSequenceEntry{
+        &.{.{
             .xorb_hash = xorb_hash,
             .cas_flags = 0,
             .unpacked_segment_size = @intCast(total_size),
@@ -116,14 +116,13 @@ fn buildUploadShard(
     defer allocator.free(cas_entries);
 
     var raw_offset: u32 = 0;
-    for (chunk_hashes, chunk_sizes, 0..) |chunk_hash, chunk_size, i| {
-        cas_entries[i] = .{
+    for (chunk_hashes, chunk_sizes, cas_entries) |chunk_hash, chunk_size, *entry| {
+        entry.* = .{
             .chunk_hash = chunk_hash,
             .byte_range_start = raw_offset,
             .unpacked_segment_size = chunk_size,
             .reserved = @splat(0),
         };
-
         raw_offset += chunk_size;
     }
 
@@ -134,5 +133,5 @@ fn buildUploadShard(
         @intCast(xorb_data.len),
     );
 
-    return try builder.serialize();
+    return builder.serialize();
 }

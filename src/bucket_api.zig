@@ -40,7 +40,7 @@ pub fn ensureBucket(
     bucket_id: []const u8,
     hf_token: []const u8,
 ) !void {
-    const slash_idx = std.mem.indexOf(u8, bucket_id, "/") orelse
+    const slash_idx = std.mem.indexOfScalar(u8, bucket_id, '/') orelse
         return BucketError.InvalidResponse;
 
     const url = try std.fmt.allocPrint(
@@ -65,7 +65,7 @@ pub fn ensureBucket(
     });
     defer req.deinit();
 
-    req.transfer_encoding = .{ .chunked = {} };
+    req.transfer_encoding = .chunked;
     var req_body = try req.sendBodyUnflushed(&.{});
     try req_body.writer.writeAll("{}\n");
     try req_body.end();
@@ -220,7 +220,7 @@ pub fn registerFile(
     });
     defer req.deinit();
 
-    req.transfer_encoding = .{ .chunked = {} };
+    req.transfer_encoding = .chunked;
     var req_body = try req.sendBodyUnflushed(&.{});
     try std.json.Stringify.value(.{
         .type = "addFile",

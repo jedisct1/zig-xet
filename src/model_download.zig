@@ -222,7 +222,6 @@ const XetTokenResult = struct {
     access_token: []const u8,
     cas_url: []const u8,
     exp: i64,
-    allocator: Allocator,
     json_parsed: std.json.Parsed(std.json.Value),
 
     pub fn deinit(self: *XetTokenResult) void {
@@ -237,7 +236,6 @@ fn requestXetToken(
     config: DownloadConfig,
     hf_token: []const u8,
 ) !XetTokenResult {
-    // Build token URL
     const token_url = try std.fmt.allocPrint(
         allocator,
         "https://huggingface.co/api/{s}s/{s}/xet-read-token/{s}",
@@ -245,11 +243,9 @@ fn requestXetToken(
     );
     defer allocator.free(token_url);
 
-    // Initialize HTTP client
     var http_client = std.http.Client{ .allocator = allocator, .io = io };
     defer http_client.deinit();
 
-    // Prepare authorization header
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{hf_token});
     defer allocator.free(auth_header);
 
@@ -257,7 +253,6 @@ fn requestXetToken(
         .{ .name = "Authorization", .value = auth_header },
     };
 
-    // Make HTTP request
     const uri = try std.Uri.parse(token_url);
     var req = try http_client.request(.GET, uri, .{
         .extra_headers = &extra_headers,
@@ -271,7 +266,6 @@ fn requestXetToken(
         return error.AuthenticationFailed;
     }
 
-    // Parse JSON response
     var reader = response.reader(&.{});
     const token_body = try reader.allocRemaining(allocator, @enumFromInt(10 * 1024));
     defer allocator.free(token_body);
@@ -285,15 +279,11 @@ fn requestXetToken(
     errdefer parsed.deinit();
 
     const root = parsed.value.object;
-    const access_token = root.get("accessToken").?.string;
-    const cas_url = root.get("casUrl").?.string;
-    const exp = root.get("exp").?.integer;
 
-    return XetTokenResult{
-        .access_token = access_token,
-        .cas_url = cas_url,
-        .exp = exp,
-        .allocator = allocator,
+    return .{
+        .access_token = root.get("accessToken").?.string,
+        .cas_url = root.get("casUrl").?.string,
+        .exp = root.get("exp").?.integer,
         .json_parsed = parsed,
     };
 }
@@ -329,7 +319,6 @@ pub fn downloadModelToFile(
     config: DownloadConfig,
     output_path: []const u8,
 ) !void {
-    // Open output file for writing
     const file = try std.Io.Dir.createFile(.cwd(), io, output_path, .{});
     defer file.close(io);
 
@@ -370,10 +359,8 @@ pub fn downloadModelToWriter(
     var xet_token = try requestXetToken(allocator, io, config, hf_token.value);
     defer xet_token.deinit();
 
-    // Convert file hash from API hex format to binary
     const file_hash = try cas_client.apiHexToHash(config.file_hash_hex);
 
-    // Initialize CAS client
     var cas = try cas_client.CasClient.init(
         allocator,
         io,
@@ -382,7 +369,6 @@ pub fn downloadModelToWriter(
     );
     defer cas.deinit();
 
-    // Reconstruct file using stream API
     var reconstructor = reconstruction.FileReconstructor.init(allocator, &cas);
     try reconstructor.reconstructStream(file_hash, writer);
 }
@@ -490,10 +476,8 @@ pub fn downloadModel(
     var xet_token = try requestXetToken(allocator, io, config, hf_token.value);
     defer xet_token.deinit();
 
-    // Convert file hash from API hex format to binary
     const file_hash = try cas_client.apiHexToHash(config.file_hash_hex);
 
-    // Initialize CAS client
     var cas = try cas_client.CasClient.init(
         allocator,
         io,
@@ -502,7 +486,6 @@ pub fn downloadModel(
     );
     defer cas.deinit();
 
-    // Reconstruct file in memory
     var reconstructor = reconstruction.FileReconstructor.init(allocator, &cas);
     return try reconstructor.reconstructFile(file_hash);
 }

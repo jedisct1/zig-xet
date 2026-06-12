@@ -61,15 +61,11 @@ pub fn main(init: std.process.Init) !void {
                 return error.InvalidArgs;
             }
             const chunk_str = args.items[i];
-            if (std.mem.eql(u8, chunk_str, "gearhash")) {
-                chunking_algorithm = .gearhash;
-            } else if (std.mem.eql(u8, chunk_str, "ultracdc")) {
-                chunking_algorithm = .ultracdc;
-            } else {
+            chunking_algorithm = std.meta.stringToEnum(xet.chunking.ChunkingAlgorithm, chunk_str) orelse {
                 try stderr.print("Error: Unknown chunking algorithm: {s}\n", .{chunk_str});
                 try stderr.print("Valid algorithms: gearhash, ultracdc\n", .{});
                 return error.InvalidArgs;
-            }
+            };
         } else if (arg.len > 0 and arg[0] == '-') {
             try stderr.print("Error: Unknown option: {s}\n", .{arg});
             try printUsage(args.items[0], stderr);
@@ -129,15 +125,7 @@ pub fn main(init: std.process.Init) !void {
 
     var reader_buffer: [64 * 1024]u8 = undefined;
     var file_reader = std.Io.File.Reader.init(file, io, &reader_buffer);
-    var total_read: usize = 0;
-    while (total_read < stat.size) {
-        const n = file_reader.interface.readSliceShort(data[total_read..]) catch |err| {
-            if (err == error.EndOfStream) break;
-            return err;
-        };
-        if (n == 0) break;
-        total_read += n;
-    }
+    const total_read = try file_reader.interface.readSliceShort(data);
 
     const file_data = data[0..total_read];
     const size_mb = @as(f64, @floatFromInt(total_read)) / (1024.0 * 1024.0);
@@ -194,7 +182,7 @@ pub fn main(init: std.process.Init) !void {
     try stdout.flush();
 }
 
-fn printUsage(prog_name: []const u8, writer: anytype) !void {
+fn printUsage(prog_name: []const u8, writer: *std.Io.Writer) !void {
     try writer.print(
         \\Usage: {s} <bucket_id> <file> [options]
         \\

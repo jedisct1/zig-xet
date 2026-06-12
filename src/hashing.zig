@@ -6,15 +6,11 @@ const constants = @import("constants.zig");
 pub const Hash = [constants.HashSize]u8;
 
 pub fn computeDataHash(data: []const u8) Hash {
-    var hash: Hash = undefined;
-    std.crypto.hash.Blake3.hash(data, &hash, .{ .key = constants.DataKey });
-    return hash;
+    return keyedHash(constants.DataKey, data);
 }
 
 pub fn computeInternalNodeHash(data: []const u8) Hash {
-    var hash: Hash = undefined;
-    std.crypto.hash.Blake3.hash(data, &hash, .{ .key = constants.InternalNodeKey });
-    return hash;
+    return keyedHash(constants.InternalNodeKey, data);
 }
 
 pub fn computeFileHash(merkle_root: Hash) Hash {
@@ -25,15 +21,11 @@ pub fn computeFileHash(merkle_root: Hash) Hash {
 /// This is used when shards have keyed hash protection enabled.
 /// When salt is all zeros, this is equivalent to computeFileHash().
 pub fn computeFileHashWithSalt(merkle_root: Hash, salt: [32]u8) Hash {
-    var hash: Hash = undefined;
-    std.crypto.hash.Blake3.hash(&merkle_root, &hash, .{ .key = salt });
-    return hash;
+    return keyedHash(salt, &merkle_root);
 }
 
 pub fn computeVerificationHash(data: []const u8) Hash {
-    var hash: Hash = undefined;
-    std.crypto.hash.Blake3.hash(data, &hash, .{ .key = constants.VerificationKey });
-    return hash;
+    return keyedHash(constants.VerificationKey, data);
 }
 
 /// Compute a BLAKE3 keyed hash.
@@ -65,24 +57,19 @@ pub fn isZeroKey(key: [32]u8) bool {
 
 pub fn hashToHex(hash: Hash) [64]u8 {
     var result: [64]u8 = undefined;
-    var i: usize = 0;
-    while (i < 4) : (i += 1) {
-        const offset = i * 8;
-        const val = std.mem.readInt(u64, hash[offset..][0..8], .little);
+    for (0..4) |i| {
+        const val = std.mem.readInt(u64, hash[i * 8 ..][0..8], .little);
         _ = std.fmt.bufPrint(result[i * 16 ..][0..16], "{x:0>16}", .{val}) catch unreachable;
     }
     return result;
 }
 
+/// Hashes are formatted as [u64; 4] with each u64 in little-endian format.
 pub fn hexToHash(hex: []const u8) !Hash {
     if (hex.len != 64) return error.InvalidHexLength;
-    // Hashes are formatted as [u64; 4] with each u64 in little-endian format
-    // Parse each 16-char hex string as a u64, then write as little-endian bytes
     var hash: Hash = undefined;
-    var i: usize = 0;
-    while (i < 4) : (i += 1) {
-        const hex_chunk = hex[i * 16 ..][0..16];
-        const val = try std.fmt.parseInt(u64, hex_chunk, 16);
+    for (0..4) |i| {
+        const val = try std.fmt.parseInt(u64, hex[i * 16 ..][0..16], 16);
         std.mem.writeInt(u64, hash[i * 8 ..][0..8], val, .little);
     }
     return hash;
@@ -102,10 +89,8 @@ fn nextMergeCut(nodes: []const MerkleNode) usize {
 
     const end = @min(2 * MeanTreeBranchingFactor + 1, nodes.len);
 
-    var i: usize = 2;
-    while (i < end) : (i += 1) {
+    for (2..end) |i| {
         const hash_as_u64 = std.mem.readInt(u64, nodes[i].hash[24..32], .little);
-
         if (hash_as_u64 % MeanTreeBranchingFactor == 0) {
             return i + 1;
         }
@@ -115,21 +100,16 @@ fn nextMergeCut(nodes: []const MerkleNode) usize {
 }
 
 fn mergedHashOfSequence(allocator: std.mem.Allocator, nodes: []const MerkleNode) !MerkleNode {
-    var buffer: std.ArrayList(u8) = .empty;
-    defer buffer.deinit(allocator);
+    var buffer: std.Io.Writer.Allocating = .init(allocator);
+    defer buffer.deinit();
 
     var total_size: u64 = 0;
-    var line_buf: [88]u8 = undefined;
-
     for (nodes) |node| {
-        const hex = hashToHex(node.hash);
-        const line = std.fmt.bufPrint(&line_buf, "{s} : {d}\n", .{ hex, node.size }) catch unreachable;
-        try buffer.appendSlice(allocator, line);
+        buffer.writer.print("{s} : {d}\n", .{ hashToHex(node.hash), node.size }) catch return error.OutOfMemory;
         total_size += node.size;
     }
 
-    const merged_hash = computeInternalNodeHash(buffer.items);
-    return MerkleNode{ .hash = merged_hash, .size = total_size };
+    return .{ .hash = computeInternalNodeHash(buffer.written()), .size = total_size };
 }
 
 pub fn buildMerkleTree(allocator: std.mem.Allocator, chunks: []const MerkleNode) !Hash {
@@ -143,8 +123,7 @@ pub fn buildMerkleTree(allocator: std.mem.Allocator, chunks: []const MerkleNode)
 
     var hv = try std.ArrayList(MerkleNode).initCapacity(allocator, chunks.len);
     defer hv.deinit(allocator);
-
-    try hv.appendSlice(allocator, chunks);
+    hv.appendSliceAssumeCapacity(chunks);
 
     while (hv.items.len > 1) {
         var write_idx: usize = 0;
@@ -152,13 +131,12 @@ pub fn buildMerkleTree(allocator: std.mem.Allocator, chunks: []const MerkleNode)
 
         while (read_idx < hv.items.len) {
             const next_cut = read_idx + nextMergeCut(hv.items[read_idx..]);
-            const merged = try mergedHashOfSequence(allocator, hv.items[read_idx..next_cut]);
-            hv.items[write_idx] = merged;
+            hv.items[write_idx] = try mergedHashOfSequence(allocator, hv.items[read_idx..next_cut]);
             write_idx += 1;
             read_idx = next_cut;
         }
 
-        try hv.resize(allocator, write_idx);
+        hv.shrinkRetainingCapacity(write_idx);
     }
 
     return hv.items[0].hash;

@@ -122,14 +122,9 @@ fn processChunkInner(ctx: *ChunkFetchContext) !ChunkResult {
     const chunk_data = try xorb_reader.extractChunkRange(local_start, local_end);
     errdefer ctx.allocator.free(chunk_data);
 
-    const chunk_hash = if (ctx.compute_hashes)
-        hashing.computeDataHash(chunk_data)
-    else
-        null;
-
-    return ChunkResult{
+    return .{
         .data = chunk_data,
-        .hash = chunk_hash,
+        .hash = if (ctx.compute_hashes) hashing.computeDataHash(chunk_data) else null,
         .index = ctx.index,
         .allocator = ctx.allocator,
     };
@@ -148,7 +143,7 @@ pub const ParallelFetcher = struct {
         http_client: *std.http.Client,
         compute_hashes: bool,
     ) ParallelFetcher {
-        return ParallelFetcher{
+        return .{
             .allocator = allocator,
             .io = io,
             .http_client = http_client,
@@ -223,20 +218,15 @@ pub const ParallelFetcher = struct {
             return first_error orelse error.UnknownError;
         }
 
-        var ordered_results = try self.allocator.alloc(ChunkResult, terms.len);
-        errdefer {
-            for (ordered_results) |*result| {
-                result.deinit();
-            }
-            self.allocator.free(ordered_results);
-        }
+        errdefer for (results) |*opt_result| {
+            if (opt_result.*) |*result| result.deinit();
+        };
 
-        for (results, 0..) |opt_result, i| {
-            if (opt_result) |result| {
-                ordered_results[i] = result;
-            } else {
-                return error.MissingResult;
-            }
+        const ordered_results = try self.allocator.alloc(ChunkResult, terms.len);
+        errdefer self.allocator.free(ordered_results);
+
+        for (results, ordered_results) |opt_result, *ordered| {
+            ordered.* = opt_result orelse return error.MissingResult;
         }
 
         return ordered_results;
@@ -251,10 +241,7 @@ pub const ParallelFetcher = struct {
     ) !void {
         const results = try self.fetchAll(terms, fetch_info_map);
         defer {
-            for (results) |*result| {
-                var mut_result = result.*;
-                mut_result.deinit();
-            }
+            for (results) |*result| result.deinit();
             self.allocator.free(results);
         }
 

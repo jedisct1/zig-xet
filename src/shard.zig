@@ -309,24 +309,20 @@ pub const ShardReader = struct {
     pub fn init(allocator: std.mem.Allocator, data: []const u8) !ShardReader {
         if (data.len < constants.MdbHeaderSize) return error.TruncatedShard;
 
-        const header_bytes = data[0..constants.MdbHeaderSize];
-        const header: *const ShardHeader = @ptrCast(@alignCast(header_bytes.ptr));
-
+        const header = std.mem.bytesToValue(ShardHeader, data[0..constants.MdbHeaderSize]);
         if (header.version != constants.MdbHeaderVersion) return error.UnsupportedVersion;
 
         if (data.len < constants.MdbFooterSize) return error.TruncatedShard;
 
         const footer_offset = data.len - constants.MdbFooterSize;
-        const footer_bytes = data[footer_offset .. footer_offset + constants.MdbFooterSize];
-        const footer: *const ShardFooter = @ptrCast(@alignCast(footer_bytes.ptr));
-
+        const footer = std.mem.bytesToValue(ShardFooter, data[footer_offset..][0..constants.MdbFooterSize]);
         if (footer.version != constants.MdbFooterVersion) return error.UnsupportedFooterVersion;
 
         return .{
             .allocator = allocator,
             .data = data,
-            .header = header.*,
-            .footer = footer.*,
+            .header = header,
+            .footer = footer,
         };
     }
 
@@ -343,7 +339,7 @@ pub const ShardReader = struct {
     }
 
     pub fn parseCASInfo(self: *ShardReader) !std.ArrayList(ChunkLocation) {
-        var locations = std.ArrayList(ChunkLocation).empty;
+        var locations: std.ArrayList(ChunkLocation) = .empty;
         errdefer locations.deinit(self.allocator);
 
         const cas_section = self.getCASInfoSection();
@@ -352,33 +348,26 @@ pub const ShardReader = struct {
         var offset: usize = 0;
 
         while (offset + constants.MdbEntrySize <= cas_section.len) {
-            if (offset + constants.MdbBookendMarker.len <= cas_section.len) {
-                if (std.mem.eql(u8, cas_section[offset..][0..constants.MdbBookendMarker.len], &constants.MdbBookendMarker)) {
-                    break;
-                }
+            if (offset + constants.MdbBookendMarker.len <= cas_section.len and
+                std.mem.eql(u8, cas_section[offset..][0..constants.MdbBookendMarker.len], &constants.MdbBookendMarker))
+            {
+                break;
             }
 
-            const header_bytes = cas_section[offset .. offset + constants.MdbEntrySize];
-            const header: *const CASChunkSequenceHeader = @ptrCast(@alignCast(header_bytes.ptr));
+            const header = std.mem.bytesToValue(CASChunkSequenceHeader, cas_section[offset..][0..constants.MdbEntrySize]);
             offset += constants.MdbEntrySize;
 
-            const entry_count = header.entry_count;
-            const xorb_hash = header.xorb_hash;
-
             var i: u32 = 0;
-            while (i < entry_count and offset + constants.MdbEntrySize <= cas_section.len) : (i += 1) {
-                const entry_bytes = cas_section[offset .. offset + constants.MdbEntrySize];
-                const entry: *const CASChunkSequenceEntry = @ptrCast(@alignCast(entry_bytes.ptr));
+            while (i < header.entry_count and offset + constants.MdbEntrySize <= cas_section.len) : (i += 1) {
+                const entry = std.mem.bytesToValue(CASChunkSequenceEntry, cas_section[offset..][0..constants.MdbEntrySize]);
                 offset += constants.MdbEntrySize;
 
-                const location = ChunkLocation{
+                try locations.append(self.allocator, .{
                     .hash = entry.chunk_hash,
-                    .xorb_hash = xorb_hash,
+                    .xorb_hash = header.xorb_hash,
                     .byte_offset = entry.byte_range_start,
                     .size = entry.unpacked_segment_size,
-                };
-
-                try locations.append(self.allocator, location);
+                });
             }
         }
 

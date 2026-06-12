@@ -17,7 +17,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// Export core modules (always available)
 pub const constants = @import("constants.zig");
 pub const chunking = @import("chunking.zig");
 pub const hashing = @import("hashing.zig");
@@ -26,10 +25,10 @@ pub const xorb = @import("xorb.zig");
 pub const shard = @import("shard.zig");
 pub const benchmark = @import("benchmark.zig");
 
-// Export reconstruction (always available, but with limited functionality on WASM)
+/// Always available, but with limited functionality on WASM (no parallel operations).
 pub const reconstruction = @import("reconstruction.zig");
 
-// Export network/threading modules only on non-WASM targets
+/// Network and threading modules below are only available on non-WASM targets.
 pub const has_network_support = builtin.target.os.tag != .wasi;
 
 pub const cas_client = if (has_network_support) @import("cas_client.zig") else struct {};

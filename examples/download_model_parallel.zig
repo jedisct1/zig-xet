@@ -1,21 +1,22 @@
+//! Download a model from Hugging Face using parallel chunk fetching.
+//!
+//! This example demonstrates how to use the parallel fetching API to download
+//! models faster by fetching, decompressing, and processing chunks concurrently
+//! using Io.Group.concurrent for concurrent I/O operations.
+//!
+//! Usage:
+//!   HF_TOKEN=your_token zig build run-example-parallel -- <repo_id> [filename]
+//!
+//! Examples:
+//!   # Download a specific file
+//!   HF_TOKEN=hf_xxx zig build run-example-parallel -- jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf
+//!
+//!   # List available files in a repository
+//!   HF_TOKEN=hf_xxx zig build run-example-parallel -- apple/DiffuCoder-7B-Instruct
+
 const std = @import("std");
 const xet = @import("xet");
 
-/// Download a model from Hugging Face using parallel chunk fetching
-///
-/// This example demonstrates how to use the parallel fetching API to download
-/// models faster by fetching, decompressing, and processing chunks concurrently
-/// using Io.Group.concurrent for concurrent I/O operations.
-///
-/// Usage:
-///   HF_TOKEN=your_token zig build run-example-parallel -- <repo_id> [filename]
-///
-/// Examples:
-///   # Download a specific file
-///   HF_TOKEN=hf_xxx zig build run-example-parallel -- jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf
-///
-///   # List available files in a repository
-///   HF_TOKEN=hf_xxx zig build run-example-parallel -- apple/DiffuCoder-7B-Instruct
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 

@@ -47,13 +47,8 @@ pub const ChunkHeader = extern struct {
     }
 
     pub fn getCompressionType(self: ChunkHeader) !constants.CompressionType {
-        return switch (self.compression_type) {
-            0 => .None,
-            1 => .LZ4,
-            2 => .ByteGrouping4LZ4,
-            3 => .FullBitsliceLZ4,
-            else => error.InvalidCompressionType,
-        };
+        return std.enums.fromInt(constants.CompressionType, self.compression_type) orelse
+            error.InvalidCompressionType;
     }
 };
 
@@ -86,14 +81,11 @@ pub const XorbBuilder = struct {
             return false;
         }
 
-        const hash = hashing.computeDataHash(data);
-        const chunk = Chunk{
-            .hash = hash,
+        try self.chunks.append(self.allocator, .{
+            .hash = hashing.computeDataHash(data),
             .data = data,
             .index = @intCast(self.chunks.items.len),
-        };
-
-        try self.chunks.append(self.allocator, chunk);
+        });
         self.total_size += estimated_size;
         return true;
     }
@@ -123,17 +115,17 @@ pub const XorbBuilder = struct {
     pub fn computeHash(self: *XorbBuilder) !hashing.Hash {
         if (self.chunks.items.len == 0) return error.EmptyXorb;
 
-        var nodes = try self.allocator.alloc(hashing.MerkleNode, self.chunks.items.len);
+        const nodes = try self.allocator.alloc(hashing.MerkleNode, self.chunks.items.len);
         defer self.allocator.free(nodes);
 
-        for (self.chunks.items, 0..) |chunk, i| {
-            nodes[i] = .{
+        for (self.chunks.items, nodes) |chunk, *node| {
+            node.* = .{
                 .hash = chunk.hash,
-                .size = @as(u64, @intCast(chunk.data.len)),
+                .size = chunk.data.len,
             };
         }
 
-        return try hashing.buildMerkleTree(self.allocator, nodes);
+        return hashing.buildMerkleTree(self.allocator, nodes);
     }
 };
 
@@ -166,9 +158,6 @@ pub const XorbReader = struct {
         const uncompressed_size = header.getUncompressedSize();
         const compression_type = try header.getCompressionType();
 
-        const max_size = 0xFFFFFF;
-        if (compressed_size > max_size or uncompressed_size > max_size) return error.InvalidChunkSize;
-
         if (uncompressed_size == 0 and compressed_size > 0) return error.InvalidChunkSize;
 
         if (self.position + compressed_size > self.data.len) return error.TruncatedXorb;
@@ -176,14 +165,12 @@ pub const XorbReader = struct {
         const compressed_data = self.data[self.position .. self.position + compressed_size];
         self.position += compressed_size;
 
-        const uncompressed = try compression.decompress(
+        return try compression.decompress(
             self.allocator,
             compressed_data,
             compression_type,
             uncompressed_size,
         );
-
-        return uncompressed;
     }
 
     pub fn getChunk(self: *XorbReader, index: u32) ![]u8 {
@@ -264,16 +251,13 @@ test "xorb serialization and deserialization" {
     var builder = XorbBuilder.init(allocator);
     defer builder.deinit();
 
-    // Add some chunks
     _ = try builder.addChunk("First chunk");
     _ = try builder.addChunk("Second chunk");
     _ = try builder.addChunk("Third chunk");
 
-    // Serialize
     const serialized = try builder.serialize(.None);
     defer allocator.free(serialized);
 
-    // Deserialize
     var reader = XorbReader.init(allocator, serialized);
 
     const chunk1 = (try reader.nextChunk()).?;
@@ -302,7 +286,6 @@ test "xorb hash computation" {
     const hash1 = try builder.computeHash();
     const hash2 = try builder.computeHash();
 
-    // Should be deterministic
     try std.testing.expectEqualSlices(u8, &hash1, &hash2);
 }
 

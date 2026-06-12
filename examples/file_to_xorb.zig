@@ -111,13 +111,11 @@ const XorbCreator = struct {
                 const serialized = try builder.serialize(self.compression_type);
                 const xorb_hash = try builder.computeHash();
 
-                const xorb_info = XorbInfo{
+                try self.xorbs.append(self.allocator, .{
                     .hash = xorb_hash,
                     .serialized = serialized,
                     .chunk_count = self.current_chunk_count,
-                };
-
-                try self.xorbs.append(self.allocator, xorb_info);
+                });
             }
 
             builder.deinit();
@@ -187,7 +185,7 @@ const XorbCreator = struct {
         var file_reader = std.Io.File.Reader.init(file, self.io, &reader_buffer);
         const file_size = file_reader.getSize() catch 0;
 
-        var accumulated = std.ArrayList(u8).empty;
+        var accumulated: std.ArrayList(u8) = .empty;
         defer accumulated.deinit(self.allocator);
 
         var local_offset: usize = 0;
@@ -252,11 +250,10 @@ const XorbCreator = struct {
         );
         const file_hash = xet.hashing.computeFileHash(merkle_root);
 
-        var result_xorbs: std.ArrayList(XorbInfo) = .empty;
-        try result_xorbs.appendSlice(self.allocator, self.xorbs.items);
-        self.xorbs.clearRetainingCapacity();
+        const result_xorbs = self.xorbs;
+        self.xorbs = .empty;
 
-        return FileProcessingResult{
+        return .{
             .file_hash = file_hash,
             .file_size = bytes_read_total,
             .chunk_count = total_chunks,
@@ -301,7 +298,7 @@ fn writeXorbs(
     }
 }
 
-fn printUsage(prog_name: []const u8, stderr: anytype) !void {
+fn printUsage(prog_name: []const u8, stderr: *std.Io.Writer) !void {
     try stderr.print(
         \\Usage: {s} <file> [options]
         \\
@@ -383,15 +380,11 @@ pub fn main(init: std.process.Init) !void {
                 return error.InvalidArgs;
             }
             const chunk_str = args.items[i];
-            if (std.mem.eql(u8, chunk_str, "gearhash")) {
-                chunking_algorithm = .gearhash;
-            } else if (std.mem.eql(u8, chunk_str, "ultracdc")) {
-                chunking_algorithm = .ultracdc;
-            } else {
+            chunking_algorithm = std.meta.stringToEnum(xet.chunking.ChunkingAlgorithm, chunk_str) orelse {
                 try stderr.print("Error: Unknown chunking algorithm: {s}\n", .{chunk_str});
                 try stderr.print("Valid algorithms: gearhash, ultracdc\n", .{});
                 return error.InvalidArgs;
-            }
+            };
         } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose")) {
             verbose = true;
         } else if (arg[0] == '-') {

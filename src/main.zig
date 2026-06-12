@@ -12,10 +12,9 @@ pub fn main() !void {
     // Demonstrate chunking
     std.debug.print("1. Content-Defined Chunking Demo:\n", .{});
     const base_str = "Hello, World! This is a test of the XET protocol chunking system. ";
-    var sample_data_list = std.ArrayList(u8).empty;
+    var sample_data_list: std.ArrayList(u8) = .empty;
     defer sample_data_list.deinit(allocator);
-    var n: usize = 0;
-    while (n < 1000) : (n += 1) {
+    for (0..1000) |_| {
         try sample_data_list.appendSlice(allocator, base_str);
     }
     const sample_data = sample_data_list.items;

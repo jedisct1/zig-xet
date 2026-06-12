@@ -67,7 +67,7 @@ pub fn benchmarkChunking(allocator: std.mem.Allocator, io: Io) !BenchmarkResult 
 
     std.mem.doNotOptimizeAway(&boundaries);
 
-    return BenchmarkResult{
+    return .{
         .name = "Chunking (100 MB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),
@@ -88,7 +88,7 @@ pub fn benchmarkHashing(allocator: std.mem.Allocator, io: Io) !BenchmarkResult {
 
     std.mem.doNotOptimizeAway(&hash);
 
-    return BenchmarkResult{
+    return .{
         .name = "BLAKE3 Hashing (100 MB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),
@@ -97,15 +97,12 @@ pub fn benchmarkHashing(allocator: std.mem.Allocator, io: Io) !BenchmarkResult {
 }
 
 pub fn benchmarkMerkleTree(allocator: std.mem.Allocator, io: Io) !BenchmarkResult {
-    var chunk_infos = std.ArrayList(hashing.MerkleNode).empty;
+    var chunk_infos: std.ArrayList(hashing.MerkleNode) = .empty;
     defer chunk_infos.deinit(allocator);
 
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
-        var hash: [32]u8 = undefined;
-        @memset(&hash, @as(u8, @intCast(i)));
+    for (0..100) |i| {
         try chunk_infos.append(allocator, .{
-            .hash = hash,
+            .hash = @splat(@intCast(i)),
             .size = 65536,
         });
     }
@@ -119,7 +116,7 @@ pub fn benchmarkMerkleTree(allocator: std.mem.Allocator, io: Io) !BenchmarkResul
 
     std.mem.doNotOptimizeAway(&file_hash);
 
-    return BenchmarkResult{
+    return .{
         .name = "Merkle Tree (100 chunks)",
         .duration_ns = duration,
         .throughput_mbs = 0,
@@ -141,7 +138,7 @@ pub fn benchmarkLZ4Compression(allocator: std.mem.Allocator, io: Io) !BenchmarkR
 
     std.mem.doNotOptimizeAway(&result);
 
-    return BenchmarkResult{
+    return .{
         .name = "LZ4 Compression (50 MB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),
@@ -166,7 +163,7 @@ pub fn benchmarkLZ4Decompression(allocator: std.mem.Allocator, io: Io) !Benchmar
 
     std.mem.doNotOptimizeAway(&decompressed);
 
-    return BenchmarkResult{
+    return .{
         .name = "LZ4 Decompression (50 MB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),
@@ -179,10 +176,8 @@ pub fn benchmarkByteGrouping4LZ4(allocator: std.mem.Allocator, io: Io) !Benchmar
     const data = try allocator.alloc(u8, data_size);
     defer allocator.free(data);
 
-    var i: usize = 0;
-    while (i < data_size / 4) : (i += 1) {
-        const value = @as(u32, @intCast(i));
-        std.mem.writeInt(u32, data[i * 4 ..][0..4], value, .little);
+    for (0..data_size / 4) |i| {
+        std.mem.writeInt(u32, data[i * 4 ..][0..4], @intCast(i), .little);
     }
 
     const start = Io.Clock.Timestamp.now(io, .boot);
@@ -194,7 +189,7 @@ pub fn benchmarkByteGrouping4LZ4(allocator: std.mem.Allocator, io: Io) !Benchmar
 
     std.mem.doNotOptimizeAway(&result);
 
-    return BenchmarkResult{
+    return .{
         .name = "ByteGrouping4LZ4 (50 MB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),
@@ -227,7 +222,7 @@ pub fn benchmarkXorbSerialization(allocator: std.mem.Allocator, io: Io) !Benchma
 
     std.mem.doNotOptimizeAway(&serialized);
 
-    return BenchmarkResult{
+    return .{
         .name = "Xorb Serialization (50 MB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),
@@ -245,7 +240,7 @@ pub fn benchmarkEndToEnd(allocator: std.mem.Allocator, io: Io) !BenchmarkResult 
     var boundaries = try chunking.chunkBuffer(allocator, data);
     defer boundaries.deinit(allocator);
 
-    var chunk_infos = std.ArrayList(hashing.MerkleNode).empty;
+    var chunk_infos: std.ArrayList(hashing.MerkleNode) = .empty;
     defer chunk_infos.deinit(allocator);
 
     for (boundaries.items) |boundary| {
@@ -253,7 +248,7 @@ pub fn benchmarkEndToEnd(allocator: std.mem.Allocator, io: Io) !BenchmarkResult 
         const chunk_hash = hashing.computeDataHash(chunk);
         try chunk_infos.append(allocator, .{
             .hash = chunk_hash,
-            .size = @as(u64, @intCast(chunk.len)),
+            .size = chunk.len,
         });
     }
 
@@ -264,7 +259,7 @@ pub fn benchmarkEndToEnd(allocator: std.mem.Allocator, io: Io) !BenchmarkResult 
 
     std.mem.doNotOptimizeAway(&file_hash);
 
-    return BenchmarkResult{
+    return .{
         .name = "End-to-End (50 MB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),
@@ -284,7 +279,7 @@ pub fn benchmarkEndToEndLarge(allocator: std.mem.Allocator, io: Io) !BenchmarkRe
     var boundaries = try chunking.chunkBuffer(allocator, data);
     defer boundaries.deinit(allocator);
 
-    var chunk_infos = std.ArrayList(hashing.MerkleNode).empty;
+    var chunk_infos: std.ArrayList(hashing.MerkleNode) = .empty;
     defer chunk_infos.deinit(allocator);
 
     for (boundaries.items) |boundary| {
@@ -292,7 +287,7 @@ pub fn benchmarkEndToEndLarge(allocator: std.mem.Allocator, io: Io) !BenchmarkRe
         const chunk_hash = hashing.computeDataHash(chunk);
         try chunk_infos.append(allocator, .{
             .hash = chunk_hash,
-            .size = @as(u64, @intCast(chunk.len)),
+            .size = chunk.len,
         });
     }
 
@@ -303,7 +298,7 @@ pub fn benchmarkEndToEndLarge(allocator: std.mem.Allocator, io: Io) !BenchmarkRe
 
     std.mem.doNotOptimizeAway(&file_hash);
 
-    return BenchmarkResult{
+    return .{
         .name = "End-to-End (1 GB)",
         .duration_ns = duration,
         .throughput_mbs = throughputMbs(data_size, duration),

@@ -1,16 +1,12 @@
+//! HTTP client for the XET Content-Addressable Storage API:
+//! authentication with Hugging Face Hub tokens, file reconstruction queries,
+//! chunk deduplication queries, xorb and shard uploads, and classification
+//! of errors as retryable or non-retryable.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const hashing = @import("hashing.zig");
 
-/// CAS Client for interacting with the XET Content-Addressable Storage API
-///
-/// This module provides a complete HTTP client for the XET CAS API, including:
-/// - Authentication with Hugging Face Hub tokens
-/// - File reconstruction queries
-/// - Chunk deduplication queries
-/// - Xorb uploads
-/// - Shard uploads
-/// - Proper error handling with retryable vs non-retryable errors
 /// Authentication token structure
 pub const XetToken = struct {
     access_token: []const u8,
@@ -49,15 +45,6 @@ pub const CasError = error{
 /// Classification of HTTP errors
 pub fn classifyError(err: CasError) ErrorClass {
     return switch (err) {
-        // Non-retryable errors
-        error.BadRequest,
-        error.Unauthorized,
-        error.Forbidden,
-        error.NotFound,
-        error.RangeNotSatisfiable,
-        => .non_retryable,
-
-        // Retryable errors
         error.TooManyRequests,
         error.InternalServerError,
         error.ServiceUnavailable,
@@ -65,7 +52,6 @@ pub fn classifyError(err: CasError) ErrorClass {
         error.NetworkError,
         => .retryable,
 
-        // Other errors are non-retryable by default
         else => .non_retryable,
     };
 }
@@ -143,20 +129,92 @@ pub const ReconstructionResponse = struct {
 
     pub fn deinit(self: *ReconstructionResponse) void {
         self.allocator.free(self.terms);
-
-        // Free fetch_info
-        var iter = self.fetch_info.iterator();
-        while (iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            for (entry.value_ptr.*) |*info| {
-                var mut_info = info;
-                mut_info.deinit();
-            }
-            self.allocator.free(entry.value_ptr.*);
-        }
-        self.fetch_info.deinit();
+        freeFetchInfoMap(self.allocator, &self.fetch_info);
     }
 };
+
+fn freeFetchInfoMap(allocator: Allocator, map: *std.StringHashMap([]FetchInfo)) void {
+    var iter = map.iterator();
+    while (iter.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        for (entry.value_ptr.*) |*info| info.deinit();
+        allocator.free(entry.value_ptr.*);
+    }
+    map.deinit();
+}
+
+fn parseReconstruction(allocator: Allocator, body: []const u8) !ReconstructionResponse {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+
+    const offset_into_first_range: u64 = if (root.get("offset_into_first_range")) |offset_val|
+        @intCast(offset_val.integer)
+    else
+        0;
+
+    const terms_array = root.get("terms").?.array;
+    const terms = try allocator.alloc(ReconstructionTerm, terms_array.items.len);
+    errdefer allocator.free(terms);
+
+    for (terms_array.items, terms) |term_val, *term| {
+        const term_obj = term_val.object;
+        const range_obj = term_obj.get("range").?.object;
+        term.* = .{
+            .hash = try apiHexToHash(term_obj.get("hash").?.string),
+            .unpacked_length = @intCast(term_obj.get("unpacked_length").?.integer),
+            .range = .{
+                .start = @intCast(range_obj.get("start").?.integer),
+                .end = @intCast(range_obj.get("end").?.integer),
+            },
+        };
+    }
+
+    var fetch_info_map = std.StringHashMap([]FetchInfo).init(allocator);
+    errdefer freeFetchInfoMap(allocator, &fetch_info_map);
+
+    if (root.get("fetch_info")) |fetch_info_val| {
+        var fetch_iter = fetch_info_val.object.iterator();
+
+        while (fetch_iter.next()) |entry| {
+            const xorb_hash_key = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(xorb_hash_key);
+
+            const fetch_array = entry.value_ptr.*.array;
+            const fetch_infos = try allocator.alloc(FetchInfo, fetch_array.items.len);
+            errdefer allocator.free(fetch_infos);
+
+            for (fetch_array.items, fetch_infos) |fetch_val, *info| {
+                const fetch_obj = fetch_val.object;
+                const fetch_range_obj = fetch_obj.get("range").?.object;
+                const url_range_obj = fetch_obj.get("url_range").?.object;
+
+                info.* = .{
+                    .range = .{
+                        .start = @intCast(fetch_range_obj.get("start").?.integer),
+                        .end = @intCast(fetch_range_obj.get("end").?.integer),
+                    },
+                    .url = try allocator.dupe(u8, fetch_obj.get("url").?.string),
+                    .url_range = .{
+                        .start = @intCast(url_range_obj.get("start").?.integer),
+                        .end = @intCast(url_range_obj.get("end").?.integer),
+                    },
+                    .allocator = allocator,
+                };
+            }
+
+            try fetch_info_map.put(xorb_hash_key, fetch_infos);
+        }
+    }
+
+    return .{
+        .offset_into_first_range = offset_into_first_range,
+        .terms = terms,
+        .fetch_info = fetch_info_map,
+        .allocator = allocator,
+    };
+}
 
 /// Xorb upload response
 pub const XorbUploadResponse = struct {
@@ -202,11 +260,9 @@ pub const CasClient = struct {
         file_hash: [32]u8,
         range: ?struct { start: u64, end: u64 },
     ) !ReconstructionResponse {
-        // Convert hash to API hex format
         const hash_hex = try hashToApiHex(file_hash, self.allocator);
         defer self.allocator.free(hash_hex);
 
-        // Build URL: /reconstructions/{file_id}
         const url = try std.fmt.allocPrint(
             self.allocator,
             "{s}/reconstructions/{s}",
@@ -214,13 +270,11 @@ pub const CasClient = struct {
         );
         defer self.allocator.free(url);
 
-        // Prepare headers
         const auth_header = try self.makeAuthHeader();
         defer self.allocator.free(auth_header);
 
-        // Build extra headers array
         var range_header_buf: [64]u8 = undefined;
-        var extra_headers_storage: [3]std.http.Header = undefined;
+        var extra_headers_storage: [2]std.http.Header = undefined;
         var extra_headers_count: usize = 1;
         extra_headers_storage[0] = .{ .name = "Authorization", .value = auth_header };
 
@@ -234,7 +288,6 @@ pub const CasClient = struct {
             extra_headers_count = 2;
         }
 
-        // Make HTTP request
         const uri = try std.Uri.parse(url);
         var req = try self.http_client.request(.GET, uri, .{
             .extra_headers = extra_headers_storage[0..extra_headers_count],
@@ -244,136 +297,19 @@ pub const CasClient = struct {
         try req.sendBodiless();
         var response = try req.receiveHead(&.{});
 
-        // Check status code
         if (response.head.status != .ok) {
             return statusToError(response.head.status);
         }
 
-        // Read response body with decompression support
-        // Note: decompress_buffer must be at least std.compress.flate.max_window_len (64KB)
+        // decompress_buffer must be at least std.compress.flate.max_window_len (64KB)
         var transfer_buffer: [16 * 1024]u8 = undefined;
         var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
         var decompress: std.http.Decompress = undefined;
         var reader = response.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
-        const body = try reader.allocRemaining(self.allocator, @enumFromInt(10 * 1024 * 1024)); // 10MB max
+        const body = try reader.allocRemaining(self.allocator, @enumFromInt(10 * 1024 * 1024));
         defer self.allocator.free(body);
 
-        // Parse JSON response
-        const parsed = try std.json.parseFromSlice(
-            std.json.Value,
-            self.allocator,
-            body,
-            .{},
-        );
-        defer parsed.deinit();
-
-        // Extract reconstruction data
-        const root = parsed.value.object;
-
-        // Get offset_into_first_range (defaults to 0 if not present)
-        const offset_into_first_range = if (root.get("offset_into_first_range")) |offset_val|
-            @as(u64, @intCast(offset_val.integer))
-        else
-            0;
-
-        // Parse terms array
-        const terms_array = root.get("terms").?.array;
-        var terms = try self.allocator.alloc(ReconstructionTerm, terms_array.items.len);
-        errdefer self.allocator.free(terms);
-
-        for (terms_array.items, 0..) |term_val, i| {
-            const term_obj = term_val.object;
-
-            // Get hash (xorb hash as hex string)
-            const hash_str = term_obj.get("hash").?.string;
-            const hash = try apiHexToHash(hash_str);
-
-            // Get unpacked_length
-            const unpacked_length = @as(u32, @intCast(term_obj.get("unpacked_length").?.integer));
-
-            // Get range (chunk range within xorb)
-            const range_obj = term_obj.get("range").?.object;
-            const range_start = @as(u32, @intCast(range_obj.get("start").?.integer));
-            const range_end = @as(u32, @intCast(range_obj.get("end").?.integer));
-
-            terms[i] = .{
-                .hash = hash,
-                .unpacked_length = unpacked_length,
-                .range = .{
-                    .start = range_start,
-                    .end = range_end,
-                },
-            };
-        }
-
-        // Parse fetch_info map
-        var fetch_info_map = std.StringHashMap([]FetchInfo).init(self.allocator);
-        errdefer {
-            var iter = fetch_info_map.iterator();
-            while (iter.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                for (entry.value_ptr.*) |*info| {
-                    var mut_info = info;
-                    mut_info.deinit();
-                }
-                self.allocator.free(entry.value_ptr.*);
-            }
-            fetch_info_map.deinit();
-        }
-
-        if (root.get("fetch_info")) |fetch_info_val| {
-            const fetch_info_obj = fetch_info_val.object;
-            var fetch_iter = fetch_info_obj.iterator();
-
-            while (fetch_iter.next()) |entry| {
-                const xorb_hash_key = try self.allocator.dupe(u8, entry.key_ptr.*);
-                errdefer self.allocator.free(xorb_hash_key);
-
-                const fetch_array = entry.value_ptr.*.array;
-                var fetch_infos = try self.allocator.alloc(FetchInfo, fetch_array.items.len);
-                errdefer self.allocator.free(fetch_infos);
-
-                for (fetch_array.items, 0..) |fetch_val, j| {
-                    const fetch_obj = fetch_val.object;
-
-                    // Get range
-                    const fetch_range_obj = fetch_obj.get("range").?.object;
-                    const fetch_range_start = @as(u32, @intCast(fetch_range_obj.get("start").?.integer));
-                    const fetch_range_end = @as(u32, @intCast(fetch_range_obj.get("end").?.integer));
-
-                    // Get URL
-                    const fetch_url = try self.allocator.dupe(u8, fetch_obj.get("url").?.string);
-                    errdefer self.allocator.free(fetch_url);
-
-                    // Get url_range
-                    const url_range_obj = fetch_obj.get("url_range").?.object;
-                    const url_range_start = @as(u64, @intCast(url_range_obj.get("start").?.integer));
-                    const url_range_end = @as(u64, @intCast(url_range_obj.get("end").?.integer));
-
-                    fetch_infos[j] = .{
-                        .range = .{
-                            .start = fetch_range_start,
-                            .end = fetch_range_end,
-                        },
-                        .url = fetch_url,
-                        .url_range = .{
-                            .start = url_range_start,
-                            .end = url_range_end,
-                        },
-                        .allocator = self.allocator,
-                    };
-                }
-
-                try fetch_info_map.put(xorb_hash_key, fetch_infos);
-            }
-        }
-
-        return ReconstructionResponse{
-            .offset_into_first_range = offset_into_first_range,
-            .terms = terms,
-            .fetch_info = fetch_info_map,
-            .allocator = self.allocator,
-        };
+        return parseReconstruction(self.allocator, body);
     }
 
     /// Query chunk deduplication information
@@ -382,11 +318,9 @@ pub const CasClient = struct {
         self: *CasClient,
         chunk_hash: [32]u8,
     ) ![]u8 {
-        // Convert hash to API hex format
         const hash_hex = try hashToApiHex(chunk_hash, self.allocator);
         defer self.allocator.free(hash_hex);
 
-        // Build URL: /chunks/default-merkledb/{hash}
         const url = try std.fmt.allocPrint(
             self.allocator,
             "{s}/chunks/default-merkledb/{s}",
@@ -394,7 +328,6 @@ pub const CasClient = struct {
         );
         defer self.allocator.free(url);
 
-        // Prepare headers
         const auth_header = try self.makeAuthHeader();
         defer self.allocator.free(auth_header);
 
@@ -402,7 +335,6 @@ pub const CasClient = struct {
             .{ .name = "Authorization", .value = auth_header },
         };
 
-        // Make HTTP request
         const uri = try std.Uri.parse(url);
         var req = try self.http_client.request(.GET, uri, .{
             .extra_headers = &extra_headers,
@@ -412,16 +344,14 @@ pub const CasClient = struct {
         try req.sendBodiless();
         var response = try req.receiveHead(&.{});
 
-        // Check status code
         if (response.head.status != .ok) {
             return statusToError(response.head.status);
         }
 
-        // Read binary response
         var reader = response.reader(&.{});
         // Use 80 MB limit to allow for protocol overhead while still protecting against excessive memory usage
         // The protocol specifies 64 MiB max for content, but we need headroom for HTTP headers/overhead
-        const shard_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024)); // 80MB max
+        const shard_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024));
         return shard_data;
     }
 
@@ -431,11 +361,9 @@ pub const CasClient = struct {
         xorb_hash: [32]u8,
         xorb_data: []const u8,
     ) !XorbUploadResponse {
-        // Convert hash to API hex format
         const hash_hex = try hashToApiHex(xorb_hash, self.allocator);
         defer self.allocator.free(hash_hex);
 
-        // Build URL: /xorbs/default/{hash}
         const url = try std.fmt.allocPrint(
             self.allocator,
             "{s}/xorbs/default/{s}",
@@ -443,7 +371,6 @@ pub const CasClient = struct {
         );
         defer self.allocator.free(url);
 
-        // Prepare headers
         const auth_header = try self.makeAuthHeader();
         defer self.allocator.free(auth_header);
 
@@ -451,7 +378,6 @@ pub const CasClient = struct {
             .{ .name = "Authorization", .value = auth_header },
         };
 
-        // Make HTTP request
         const uri = try std.Uri.parse(url);
         var req = try self.http_client.request(.POST, uri, .{
             .extra_headers = &extra_headers,
@@ -468,17 +394,14 @@ pub const CasClient = struct {
         try req.connection.?.flush();
         var response = try req.receiveHead(&.{});
 
-        // Check status code
         if (response.head.status != .ok) {
             return statusToError(response.head.status);
         }
 
-        // Read response body
         var reader = response.reader(&.{});
-        const body = try reader.allocRemaining(self.allocator, @enumFromInt(1024)); // Small response
+        const body = try reader.allocRemaining(self.allocator, @enumFromInt(1024));
         defer self.allocator.free(body);
 
-        // Parse JSON response
         const parsed = try std.json.parseFromSlice(
             std.json.Value,
             self.allocator,
@@ -498,11 +421,9 @@ pub const CasClient = struct {
         self: *CasClient,
         xorb_hash: [32]u8,
     ) ![]u8 {
-        // Convert hash to API hex format
         const hash_hex = try hashToApiHex(xorb_hash, self.allocator);
         defer self.allocator.free(hash_hex);
 
-        // Build URL: /xorbs/default/{hash}
         const url = try std.fmt.allocPrint(
             self.allocator,
             "{s}/xorbs/default/{s}",
@@ -510,7 +431,6 @@ pub const CasClient = struct {
         );
         defer self.allocator.free(url);
 
-        // Prepare headers
         const auth_header = try self.makeAuthHeader();
         defer self.allocator.free(auth_header);
 
@@ -518,7 +438,6 @@ pub const CasClient = struct {
             .{ .name = "Authorization", .value = auth_header },
         };
 
-        // Make HTTP request
         const uri = try std.Uri.parse(url);
         var req = try self.http_client.request(.GET, uri, .{
             .extra_headers = &extra_headers,
@@ -528,16 +447,14 @@ pub const CasClient = struct {
         try req.sendBodiless();
         var response = try req.receiveHead(&.{});
 
-        // Check status code
         if (response.head.status != .ok) {
             return statusToError(response.head.status);
         }
 
-        // Read binary response
         var reader = response.reader(&.{});
         // Use 80 MB limit to allow for protocol overhead while still protecting against excessive memory usage
         // The protocol specifies 64 MiB max for Xorb content, but we need headroom for HTTP headers/overhead
-        const xorb_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024)); // 80MB max
+        const xorb_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024));
         return xorb_data;
     }
 
@@ -548,7 +465,6 @@ pub const CasClient = struct {
         url: []const u8,
         byte_range: ?struct { start: u64, end: u64 },
     ) ![]u8 {
-        // Build extra headers array
         var range_header_buf: [64]u8 = undefined;
         var extra_headers_storage: [1]std.http.Header = undefined;
         var extra_headers_count: usize = 0;
@@ -580,11 +496,10 @@ pub const CasClient = struct {
             return statusToError(response.head.status);
         }
 
-        // Read binary response
         var reader = response.reader(&.{});
         // Use 80 MB limit to allow for protocol overhead while still protecting against excessive memory usage
         // The protocol specifies 64 MiB max for Xorb content, but we need headroom for HTTP headers/overhead
-        const xorb_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024)); // 80MB max
+        const xorb_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024));
         return xorb_data;
     }
 
@@ -593,7 +508,6 @@ pub const CasClient = struct {
         self: *CasClient,
         shard_data: []const u8,
     ) !ShardUploadResponse {
-        // Build URL: /shards
         const url = try std.fmt.allocPrint(
             self.allocator,
             "{s}/shards",
@@ -601,7 +515,6 @@ pub const CasClient = struct {
         );
         defer self.allocator.free(url);
 
-        // Prepare headers
         const auth_header = try self.makeAuthHeader();
         defer self.allocator.free(auth_header);
 
@@ -609,7 +522,6 @@ pub const CasClient = struct {
             .{ .name = "Authorization", .value = auth_header },
         };
 
-        // Make HTTP request
         const uri = try std.Uri.parse(url);
         var req = try self.http_client.request(.POST, uri, .{
             .extra_headers = &extra_headers,
@@ -626,17 +538,14 @@ pub const CasClient = struct {
         try req.connection.?.flush();
         var response = try req.receiveHead(&.{});
 
-        // Check status code
         if (response.head.status != .ok) {
             return statusToError(response.head.status);
         }
 
-        // Read response body
         var reader = response.reader(&.{});
-        const body = try reader.allocRemaining(self.allocator, @enumFromInt(1024)); // Small response
+        const body = try reader.allocRemaining(self.allocator, @enumFromInt(1024));
         defer self.allocator.free(body);
 
-        // Parse JSON response
         const parsed = try std.json.parseFromSlice(
             std.json.Value,
             self.allocator,
@@ -651,7 +560,49 @@ pub const CasClient = struct {
     }
 };
 
-// Tests
+test "parseReconstruction extracts terms and fetch info" {
+    const allocator = std.testing.allocator;
+
+    const body =
+        \\{
+        \\  "offset_into_first_range": 42,
+        \\  "terms": [
+        \\    {
+        \\      "hash": "cfc5d07f6f03c29bbf424132963fe08d19a37d5757aaf520bf08119f05cd56d6",
+        \\      "unpacked_length": 1000,
+        \\      "range": { "start": 0, "end": 5 }
+        \\    }
+        \\  ],
+        \\  "fetch_info": {
+        \\    "cfc5d07f6f03c29bbf424132963fe08d19a37d5757aaf520bf08119f05cd56d6": [
+        \\      {
+        \\        "range": { "start": 0, "end": 5 },
+        \\        "url": "https://example.com/xorb",
+        \\        "url_range": { "start": 0, "end": 999 }
+        \\      }
+        \\    ]
+        \\  }
+        \\}
+    ;
+
+    var recon = try parseReconstruction(allocator, body);
+    defer recon.deinit();
+
+    try std.testing.expectEqual(@as(u64, 42), recon.offset_into_first_range);
+    try std.testing.expectEqual(@as(usize, 1), recon.terms.len);
+    try std.testing.expectEqual(@as(u32, 1000), recon.terms[0].unpacked_length);
+    try std.testing.expectEqual(@as(u32, 0), recon.terms[0].range.start);
+    try std.testing.expectEqual(@as(u32, 5), recon.terms[0].range.end);
+
+    const expected_hash = try hashing.hexToHash("cfc5d07f6f03c29bbf424132963fe08d19a37d5757aaf520bf08119f05cd56d6");
+    try std.testing.expectEqualSlices(u8, &expected_hash, &recon.terms[0].hash);
+
+    const infos = recon.fetch_info.get("cfc5d07f6f03c29bbf424132963fe08d19a37d5757aaf520bf08119f05cd56d6").?;
+    try std.testing.expectEqual(@as(usize, 1), infos.len);
+    try std.testing.expectEqualStrings("https://example.com/xorb", infos[0].url);
+    try std.testing.expectEqual(@as(u64, 999), infos[0].url_range.end);
+}
+
 test "hash conversion - API hex format" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -1,26 +1,26 @@
+//! Download a model from Hugging Face using the XET protocol.
+//!
+//! This example demonstrates how to use the high-level model download API.
+//! The library handles all the complexity:
+//! - Authentication with Hugging Face Hub
+//! - Requesting XET tokens
+//! - Querying CAS for file reconstruction info
+//! - Fetching chunks from xorbs (with full deduplication support)
+//! - Reconstructing and saving the file
+//!
+//! Usage:
+//!   HF_TOKEN=your_token zig build run-example-download -- <repo_id> [filename]
+//!
+//! Examples:
+//!   # List files in a repository
+//!   HF_TOKEN=hf_xxx zig build run-example-download -- jedisct1/MiMo-7B-RL-GGUF
+//!
+//!   # Download a specific file
+//!   HF_TOKEN=hf_xxx zig build run-example-download -- jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf
+
 const std = @import("std");
 const xet = @import("xet");
 
-/// Download a model from Hugging Face using the XET protocol
-///
-/// This example demonstrates how to use the high-level model download API.
-/// The library handles all the complexity:
-/// - Authentication with Hugging Face Hub
-/// - Requesting XET tokens
-/// - Querying CAS for file reconstruction info
-/// - Fetching chunks from xorbs (with full deduplication support)
-/// - Reconstructing and saving the file
-///
-/// Usage:
-///   HF_TOKEN=your_token zig build run-example-download -- <repo_id> [filename]
-///
-/// Examples:
-///   # List files in a repository
-///   HF_TOKEN=hf_xxx zig build run-example-download -- jedisct1/MiMo-7B-RL-GGUF
-///
-///   # Download a specific file
-///   HF_TOKEN=hf_xxx zig build run-example-download -- jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf
-///
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;

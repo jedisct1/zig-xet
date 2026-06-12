@@ -1,28 +1,23 @@
+//! File reconstruction from the XET CAS.
+//!
+//! Reconstructing a file involves:
+//! 1. Query CAS for file reconstruction information (terms and fetch_info)
+//! 2. For each term, download the xorb from the fetch_info URL
+//! 3. Extract the specified chunk range from the xorb
+//! 4. Assemble chunks in order to reconstruct the file
+//!
+//! Note: FileReconstructor is only available on platforms with network support (not WASM)
+
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const xorb = @import("xorb.zig");
 const shard = @import("shard.zig");
 
-// Network-dependent imports only for non-WASM targets
 const has_network = builtin.target.os.tag != .wasi;
 const cas_client = if (has_network) @import("cas_client.zig") else struct {};
 const parallel_fetcher = if (has_network) @import("parallel_fetcher.zig") else struct {};
 
-/// File reconstruction module
-///
-/// This module provides functionality for reconstructing files from the XET CAS
-/// by fetching and assembling chunks based on file reconstruction information.
-///
-/// The reconstruction process involves:
-/// 1. Query CAS for file reconstruction information (terms and fetch_info)
-/// 2. For each term, download the xorb from the fetch_info URL
-/// 3. Extract the specified chunk range from the xorb
-/// 4. Assemble chunks in order to reconstruct the file
-///
-/// Note: FileReconstructor is only available on platforms with network support (not WASM)
-
-// Helper type for xorb data (only needed when network support is available)
 const XorbData = if (has_network) struct {
     data: []u8,
     local_start: u32,
@@ -35,7 +30,7 @@ pub const FileReconstructor = if (has_network) struct {
     cas: *cas_client.CasClient,
 
     pub fn init(allocator: Allocator, cas: *cas_client.CasClient) FileReconstructor {
-        return FileReconstructor{
+        return .{
             .allocator = allocator,
             .cas = cas,
         };
@@ -58,13 +53,10 @@ pub const FileReconstructor = if (has_network) struct {
                     .{ .start = fetch_info.url_range.start, .end = fetch_info.url_range.end },
                 );
 
-                const local_start = term.range.start - fetch_info.range.start;
-                const local_end = term.range.end - fetch_info.range.start;
-
-                return XorbData{
+                return .{
                     .data = xorb_data,
-                    .local_start = local_start,
-                    .local_end = local_end,
+                    .local_start = term.range.start - fetch_info.range.start,
+                    .local_end = term.range.end - fetch_info.range.start,
                 };
             }
         }
@@ -75,18 +67,15 @@ pub const FileReconstructor = if (has_network) struct {
     /// Reconstruct a file from its hash
     /// Returns the complete file data
     pub fn reconstructFile(self: *FileReconstructor, file_hash: [32]u8) ![]u8 {
-        const recon = try self.cas.getReconstruction(file_hash, null);
-        defer {
-            var mut_recon = recon;
-            mut_recon.deinit();
-        }
+        var recon = try self.cas.getReconstruction(file_hash, null);
+        defer recon.deinit();
 
         var total_size: u64 = 0;
         for (recon.terms) |term| {
             total_size += term.unpacked_length;
         }
 
-        var result = try self.allocator.alloc(u8, total_size);
+        const result = try self.allocator.alloc(u8, total_size);
         errdefer self.allocator.free(result);
 
         var offset: u64 = 0;
@@ -117,14 +106,11 @@ pub const FileReconstructor = if (has_network) struct {
         start: u64,
         end: u64,
     ) ![]u8 {
-        const recon = try self.cas.getReconstruction(
+        var recon = try self.cas.getReconstruction(
             file_hash,
             .{ .start = start, .end = end - 1 },
         );
-        defer {
-            var mut_recon = recon;
-            mut_recon.deinit();
-        }
+        defer recon.deinit();
 
         const size_u64 = end - start;
         const result_len = std.math.cast(usize, size_u64) orelse return error.RangeTooLarge;
@@ -158,11 +144,8 @@ pub const FileReconstructor = if (has_network) struct {
         file_hash: [32]u8,
         writer: *std.Io.Writer,
     ) !void {
-        const recon = try self.cas.getReconstruction(file_hash, null);
-        defer {
-            var mut_recon = recon;
-            mut_recon.deinit();
-        }
+        var recon = try self.cas.getReconstruction(file_hash, null);
+        defer recon.deinit();
 
         for (recon.terms) |term| {
             const xorb_info = try self.fetchXorbForTerm(term, recon.fetch_info);
@@ -184,11 +167,8 @@ pub const FileReconstructor = if (has_network) struct {
         writer: *std.Io.Writer,
         compute_hashes: bool,
     ) !void {
-        const recon = try self.cas.getReconstruction(file_hash, null);
-        defer {
-            var mut_recon = recon;
-            mut_recon.deinit();
-        }
+        var recon = try self.cas.getReconstruction(file_hash, null);
+        defer recon.deinit();
 
         var fetcher = parallel_fetcher.ParallelFetcher.init(
             self.allocator,
@@ -201,7 +181,6 @@ pub const FileReconstructor = if (has_network) struct {
     }
 } else struct {};
 
-// Helper function for tests - exposed regardless of network support
 fn copyTermIntoRange(
     result: []u8,
     term_data: []const u8,
@@ -225,12 +204,10 @@ fn copyTermIntoRange(
     remaining.* -= to_copy;
 }
 
-// Tests
 test "xorb reader - extract chunk range" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    // Create a test xorb with multiple chunks
     var builder = xorb.XorbBuilder.init(allocator);
     defer builder.deinit();
 
@@ -255,7 +232,6 @@ test "xorb reader - extract single chunk as range" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    // Create a test xorb with multiple chunks
     var builder = xorb.XorbBuilder.init(allocator);
     defer builder.deinit();
 
@@ -266,7 +242,6 @@ test "xorb reader - extract single chunk as range" {
     const serialized = try builder.serialize(.None);
     defer allocator.free(serialized);
 
-    // Extract chunk 1 only
     var reader = xorb.XorbReader.init(allocator, serialized);
     const range_data = try reader.extractChunkRange(1, 2);
     defer allocator.free(range_data);

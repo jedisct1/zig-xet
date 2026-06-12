@@ -49,10 +49,7 @@ pub const Chunker = struct {
     }
 
     pub fn reset(self: *Chunker) void {
-        self.hash = 0;
-        self.position = 0;
-        self.chunk_start = 0;
-        self.first_chunk = true;
+        self.* = initWithAlgorithm(self.algorithm);
     }
 
     inline fn updateHash(self: *Chunker, byte: u8) void {
@@ -74,10 +71,7 @@ pub const Chunker = struct {
     }
 
     fn findNextChunkGearhash(self: *Chunker, data: []const u8) ?ChunkBoundary {
-        var offset: usize = 0;
-
-        while (offset < data.len) : (offset += 1) {
-            const byte = data[offset];
+        for (data) |byte| {
             self.position += 1;
 
             const chunk_size = self.position - self.chunk_start;
@@ -86,7 +80,7 @@ pub const Chunker = struct {
             self.updateHash(byte);
 
             if (self.isBoundary()) {
-                const boundary = ChunkBoundary{
+                const boundary: ChunkBoundary = .{
                     .start = self.chunk_start,
                     .end = self.position,
                 };
@@ -112,7 +106,7 @@ pub const Chunker = struct {
         const cutpoint = ultracdc.UltraCDC.find(options, data, remaining);
         if (cutpoint >= remaining) return null;
 
-        const boundary = ChunkBoundary{
+        const boundary: ChunkBoundary = .{
             .start = self.chunk_start,
             .end = self.chunk_start + cutpoint,
         };
@@ -123,15 +117,13 @@ pub const Chunker = struct {
     }
 
     pub fn finalize(self: *Chunker) ?ChunkBoundary {
-        if (self.position > self.chunk_start) {
-            const boundary = ChunkBoundary{
-                .start = self.chunk_start,
-                .end = self.position,
-            };
-            self.chunk_start = self.position;
-            return boundary;
-        }
-        return null;
+        if (self.position == self.chunk_start) return null;
+        const boundary: ChunkBoundary = .{
+            .start = self.chunk_start,
+            .end = self.position,
+        };
+        self.chunk_start = self.position;
+        return boundary;
     }
 };
 
@@ -191,12 +183,10 @@ test "chunk boundary size calculation" {
 test "small buffer chunking" {
     const allocator = std.testing.allocator;
 
-    // Create a small buffer (smaller than min chunk size)
     const data = "Hello, World!";
     var chunks = try chunkBuffer(allocator, data);
     defer chunks.deinit(allocator);
 
-    // Should produce exactly one chunk
     try std.testing.expectEqual(@as(usize, 1), chunks.items.len);
     try std.testing.expectEqual(@as(usize, 0), chunks.items[0].start);
     try std.testing.expectEqual(@as(usize, data.len), chunks.items[0].end);
@@ -205,20 +195,17 @@ test "small buffer chunking" {
 test "deterministic chunking" {
     const allocator = std.testing.allocator;
 
-    // Create a larger test buffer
     var data: [100000]u8 = undefined;
     for (&data, 0..) |*byte, i| {
         byte.* = @intCast(i % 256);
     }
 
-    // Chunk the same data twice
     var chunks1 = try chunkBuffer(allocator, &data);
     defer chunks1.deinit(allocator);
 
     var chunks2 = try chunkBuffer(allocator, &data);
     defer chunks2.deinit(allocator);
 
-    // Should produce identical results
     try std.testing.expectEqual(chunks1.items.len, chunks2.items.len);
     for (chunks1.items, chunks2.items) |c1, c2| {
         try std.testing.expectEqual(c1.start, c2.start);
@@ -229,7 +216,6 @@ test "deterministic chunking" {
 test "chunk sizes are within bounds" {
     const allocator = std.testing.allocator;
 
-    // Create a large random-like buffer
     var data: [1024 * 1024]u8 = undefined;
     var prng = std.Random.DefaultPrng.init(12345);
     const random = prng.random();
@@ -238,14 +224,11 @@ test "chunk sizes are within bounds" {
     var chunks = try chunkBuffer(allocator, &data);
     defer chunks.deinit(allocator);
 
-    // Check that all chunks (except possibly the last) are within bounds
     for (chunks.items, 0..) |chunk, i| {
         const size = chunk.size();
         if (i < chunks.items.len - 1) {
-            // All non-final chunks must be <= MaxChunkSize
             try std.testing.expect(size <= constants.MaxChunkSize);
         }
-        // All chunks should be > 0
         try std.testing.expect(size > 0);
     }
 }
@@ -253,12 +236,10 @@ test "chunk sizes are within bounds" {
 test "max chunk size enforcement" {
     const allocator = std.testing.allocator;
 
-    // Create a buffer with all zeros (unlikely to hit content-defined boundary)
     const data: [constants.MaxChunkSize * 2]u8 = @splat(0);
     var chunks = try chunkBuffer(allocator, &data);
     defer chunks.deinit(allocator);
 
-    // Should be forced to split at MaxChunkSize
     try std.testing.expect(chunks.items.len >= 2);
     for (chunks.items[0 .. chunks.items.len - 1]) |chunk| {
         try std.testing.expectEqual(constants.MaxChunkSize, chunk.size());

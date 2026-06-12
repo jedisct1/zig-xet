@@ -123,17 +123,15 @@ pub const CompressionType = enum(u8) {
     /// Full bitslice (bit-plane interleaving) followed by LZ4
     FullBitsliceLZ4 = 3,
 
+    const name_map = std.StaticStringMap(CompressionType).initComptime(.{
+        .{ "none", .None },
+        .{ "lz4", .LZ4 },
+        .{ "bg4", .ByteGrouping4LZ4 },
+        .{ "fbs", .FullBitsliceLZ4 },
+    });
+
     pub fn fromString(s: []const u8) ?CompressionType {
-        const map = .{
-            .{ "none", CompressionType.None },
-            .{ "lz4", CompressionType.LZ4 },
-            .{ "bg4", CompressionType.ByteGrouping4LZ4 },
-            .{ "fbs", CompressionType.FullBitsliceLZ4 },
-        };
-        inline for (map) |entry| {
-            if (std.mem.eql(u8, s, entry[0])) return entry[1];
-        }
-        return null;
+        return name_map.get(s);
     }
 };
 
