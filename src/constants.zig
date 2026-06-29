@@ -103,7 +103,7 @@ pub const VerificationKey: [32]u8 = .{
 
 pub const HashSize: usize = 32;
 
-/// Maximum serialized xorb size in bytes (64 MiB)
+/// Maximum raw payload size of a xorb in bytes (64 MiB).
 pub const MaxXorbSize: usize = 64 * 1024 * 1024;
 
 /// Xorb chunk header size in bytes

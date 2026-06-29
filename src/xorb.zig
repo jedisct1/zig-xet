@@ -76,8 +76,7 @@ pub const XorbBuilder = struct {
     }
 
     pub fn addChunk(self: *XorbBuilder, data: []const u8) !bool {
-        const estimated_size = constants.XorbChunkHeaderSize + data.len;
-        if (self.total_size + estimated_size > constants.MaxXorbSize) {
+        if (self.total_size + data.len > constants.MaxXorbSize) {
             return false;
         }
 
@@ -86,7 +85,7 @@ pub const XorbBuilder = struct {
             .data = data,
             .index = @intCast(self.chunks.items.len),
         });
-        self.total_size += estimated_size;
+        self.total_size += data.len;
         return true;
     }
 

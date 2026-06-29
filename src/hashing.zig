@@ -13,6 +13,10 @@ pub fn computeInternalNodeHash(data: []const u8) Hash {
     return keyedHash(constants.InternalNodeKey, data);
 }
 
+/// Apply the final keyed-hash step that turns a file's Merkle root into its
+/// file hash. To hash a file straight from its chunks, prefer
+/// computeFileHashFromChunks, which also covers the empty-file case where the
+/// file hash is the all-zero hash rather than the keyed hash of a zero root.
 pub fn computeFileHash(merkle_root: Hash) Hash {
     return computeFileHashWithSalt(merkle_root, constants.FileHashKey);
 }
@@ -142,6 +146,16 @@ pub fn buildMerkleTree(allocator: std.mem.Allocator, chunks: []const MerkleNode)
     return hv.items[0].hash;
 }
 
+/// Compute the file hash from its chunk nodes.
+/// Empty files (no chunks) hash to the all-zero hash directly; non-empty files
+/// use the Merkle root followed by the final ZERO_KEY keyed hash applied by
+/// computeFileHash.
+pub fn computeFileHashFromChunks(allocator: std.mem.Allocator, chunks: []const MerkleNode) !Hash {
+    if (chunks.len == 0) return @splat(0);
+    const merkle_root = try buildMerkleTree(allocator, chunks);
+    return computeFileHash(merkle_root);
+}
+
 test "data hash is deterministic" {
     const data = "Hello, World!";
     const hash1 = computeDataHash(data);
@@ -220,6 +234,28 @@ test "file hash is different from merkle root" {
     const merkle_root = computeDataHash("test");
     const file_hash = computeFileHash(merkle_root);
     try std.testing.expect(!std.mem.eql(u8, &merkle_root, &file_hash));
+}
+
+test "empty file hashes to the zero hash" {
+    const allocator = std.testing.allocator;
+    const chunks: []const MerkleNode = &.{};
+
+    const file_hash = try computeFileHashFromChunks(allocator, chunks);
+    const expected: Hash = @splat(0);
+    try std.testing.expectEqualSlices(u8, &expected, &file_hash);
+}
+
+test "non-empty file hash matches merkle root plus keyed hash" {
+    const allocator = std.testing.allocator;
+    const chunks = [_]MerkleNode{
+        .{ .hash = computeDataHash("chunk1"), .size = 6 },
+        .{ .hash = computeDataHash("chunk2"), .size = 6 },
+    };
+
+    const file_hash = try computeFileHashFromChunks(allocator, &chunks);
+    const merkle_root = try buildMerkleTree(allocator, &chunks);
+    const expected = computeFileHash(merkle_root);
+    try std.testing.expectEqualSlices(u8, &expected, &file_hash);
 }
 
 test "keyedHash produces different output for different keys" {
