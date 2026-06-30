@@ -187,7 +187,8 @@ pub fn main(init: std.process.Init) !void {
             return error.NoXetFiles;
         }
 
-        try stdout.print("Downloading {d} XET file(s) from {s}, preserving directory layout.\n\n", .{ total_files, repo_id });
+        const model_dir = std.Io.Dir.path.basename(repo_id);
+        try stdout.print("Downloading {d} XET file(s) from {s} into {s}/, preserving directory layout.\n\n", .{ total_files, repo_id, model_dir });
         try stdout.flush();
 
         const start_time = std.Io.Clock.Timestamp.now(io, .boot);
@@ -197,7 +198,9 @@ pub fn main(init: std.process.Init) !void {
         var total_bytes: u64 = 0;
         for (file_list.files) |*file| {
             if (file.xet_hash == null) continue;
-            downloadFile(allocator, io, init.minimal.environ, repo_id, file.*, file.path, stdout, stderr) catch {
+            const output_path = try std.Io.Dir.path.join(allocator, &.{ model_dir, file.path });
+            defer allocator.free(output_path);
+            downloadFile(allocator, io, init.minimal.environ, repo_id, file.*, output_path, stdout, stderr) catch {
                 failed += 1;
                 continue;
             };

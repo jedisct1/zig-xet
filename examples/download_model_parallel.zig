@@ -179,7 +179,8 @@ pub fn main(init: std.process.Init) !void {
     const name = filename.?;
 
     if (std.mem.eql(u8, name, "all")) {
-        std.debug.print("Downloading {d} XET file(s) from {s}, preserving directory layout.\n\n", .{ xet_files.items.len, repo_id });
+        const model_dir = std.Io.Dir.path.basename(repo_id);
+        std.debug.print("Downloading {d} XET file(s) from {s} into {s}/, preserving directory layout.\n\n", .{ xet_files.items.len, repo_id, model_dir });
 
         const start_time = std.Io.Clock.Timestamp.now(io, .boot);
 
@@ -187,7 +188,9 @@ pub fn main(init: std.process.Init) !void {
         var failed: usize = 0;
         var total_bytes: u64 = 0;
         for (xet_files.items) |file| {
-            downloadFile(allocator, io, environ, repo_id, file, file.path) catch |err| {
+            const output_path = try std.Io.Dir.path.join(allocator, &.{ model_dir, file.path });
+            defer allocator.free(output_path);
+            downloadFile(allocator, io, environ, repo_id, file, output_path) catch |err| {
                 std.debug.print("  Error: download of {s} failed: {}\n", .{ file.path, err });
                 failed += 1;
                 continue;
