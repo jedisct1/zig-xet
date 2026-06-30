@@ -7,6 +7,23 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const hashing = @import("hashing.zig");
 
+/// Read a full HTTP response body, transparently decompressing gzip/deflate.
+///
+/// Zig's HTTP client advertises `accept-encoding: gzip` by default, so the Hub
+/// may return a compressed body that `response.reader()` would hand back as-is;
+/// reading text or JSON has to go through this path. `max_bytes` caps the result.
+pub fn readBodyDecompressing(
+    response: *std.http.Client.Response,
+    allocator: Allocator,
+    max_bytes: usize,
+) ![]u8 {
+    var transfer_buffer: [16 * 1024]u8 = undefined;
+    var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompress: std.http.Decompress = undefined;
+    var reader = response.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
+    return reader.allocRemaining(allocator, std.Io.Limit.limited(max_bytes));
+}
+
 /// Authentication token structure
 pub const XetToken = struct {
     access_token: []const u8,
@@ -301,12 +318,7 @@ pub const CasClient = struct {
             return statusToError(response.head.status);
         }
 
-        // decompress_buffer must be at least std.compress.flate.max_window_len (64KB)
-        var transfer_buffer: [16 * 1024]u8 = undefined;
-        var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
-        var decompress: std.http.Decompress = undefined;
-        var reader = response.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
-        const body = try reader.allocRemaining(self.allocator, @enumFromInt(10 * 1024 * 1024));
+        const body = try readBodyDecompressing(&response, self.allocator, 10 * 1024 * 1024);
         defer self.allocator.free(body);
 
         return parseReconstruction(self.allocator, body);

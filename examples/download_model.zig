@@ -23,8 +23,7 @@ const std = @import("std");
 const xet = @import("xet");
 
 fn printUsage(w: *std.Io.Writer, prog: []const u8) !void {
-    try w.print("Usage: {s} <repo_id> [filename]\n", .{prog});
-    try w.print("\n", .{});
+    try w.print("Usage: {s} <repo_id> [filename]\n\n", .{prog});
     try w.print("Download a model file from Hugging Face using the XET protocol.\n", .{});
     try w.print("Requires the HF_TOKEN environment variable to be set.\n", .{});
     try w.print("\nArguments:\n", .{});
@@ -60,18 +59,16 @@ pub fn main(init: std.process.Init) !void {
     defer stderr_writer.interface.flush() catch {};
     const stderr = &stderr_writer.interface;
 
-    if (args.items.len >= 2 and
-        (std.mem.eql(u8, args.items[1], "--help") or std.mem.eql(u8, args.items[1], "-h")))
-    {
-        try printUsage(stdout, args.items[0]);
-        try stdout.flush();
-        return;
-    }
-
     if (args.items.len < 2) {
         try printUsage(stderr, args.items[0]);
         try stderr.flush();
         return error.InvalidArgs;
+    }
+
+    if (std.mem.eql(u8, args.items[1], "--help") or std.mem.eql(u8, args.items[1], "-h")) {
+        try printUsage(stdout, args.items[0]);
+        try stdout.flush();
+        return;
     }
 
     const repo_id = args.items[1];

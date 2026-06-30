@@ -19,8 +19,7 @@ const std = @import("std");
 const xet = @import("xet");
 
 fn printUsage(prog: []const u8) void {
-    std.debug.print("Usage: {s} <repo_id> [filename]\n", .{prog});
-    std.debug.print("\n", .{});
+    std.debug.print("Usage: {s} <repo_id> [filename]\n\n", .{prog});
     std.debug.print("Download a model file from Hugging Face using parallel chunk fetching.\n", .{});
     std.debug.print("Requires the HF_TOKEN environment variable to be set.\n", .{});
     std.debug.print("\nArguments:\n", .{});
@@ -45,16 +44,14 @@ pub fn main(init: std.process.Init) !void {
         try args.append(allocator, arg);
     }
 
-    if (args.items.len >= 2 and
-        (std.mem.eql(u8, args.items[1], "--help") or std.mem.eql(u8, args.items[1], "-h")))
-    {
-        printUsage(args.items[0]);
-        return;
-    }
-
     if (args.items.len < 2) {
         printUsage(args.items[0]);
         return error.InvalidArgs;
+    }
+
+    if (std.mem.eql(u8, args.items[1], "--help") or std.mem.eql(u8, args.items[1], "-h")) {
+        printUsage(args.items[0]);
+        return;
     }
 
     const repo_id = args.items[1];

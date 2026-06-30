@@ -120,8 +120,7 @@ pub fn listFiles(
         return error.ApiRequestFailed;
     }
 
-    var reader = response.reader(&.{});
-    const body = try reader.allocRemaining(allocator, @enumFromInt(1024 * 1024));
+    const body = try cas_client.readBodyDecompressing(&response, allocator, 1024 * 1024);
     defer allocator.free(body);
 
     const parsed = try std.json.parseFromSlice(
@@ -266,8 +265,7 @@ fn requestXetToken(
         return error.AuthenticationFailed;
     }
 
-    var reader = response.reader(&.{});
-    const token_body = try reader.allocRemaining(allocator, @enumFromInt(10 * 1024));
+    const token_body = try cas_client.readBodyDecompressing(&response, allocator, 10 * 1024);
     defer allocator.free(token_body);
 
     const parsed = try std.json.parseFromSlice(
