@@ -198,6 +198,7 @@ pub fn build(b: *std.Build) void {
         const run_download = b.addRunArtifact(download_example);
         download_step.dependOn(&run_download.step);
         run_download.step.dependOn(b.getInstallStep());
+        run_download.addPassthruArgs();
 
         // Example: Download model with parallel fetching
         const download_parallel_example = b.addExecutable(.{

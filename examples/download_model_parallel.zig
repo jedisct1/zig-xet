@@ -6,6 +6,7 @@
 //!
 //! Usage:
 //!   HF_TOKEN=your_token zig build run-example-parallel -- <repo_id> [filename]
+//!   zig build run-example-parallel -- --help
 //!
 //! Examples:
 //!   # Download a specific file
@@ -17,6 +18,23 @@
 const std = @import("std");
 const xet = @import("xet");
 
+fn printUsage(prog: []const u8) void {
+    std.debug.print("Usage: {s} <repo_id> [filename]\n", .{prog});
+    std.debug.print("\n", .{});
+    std.debug.print("Download a model file from Hugging Face using parallel chunk fetching.\n", .{});
+    std.debug.print("Requires the HF_TOKEN environment variable to be set.\n", .{});
+    std.debug.print("\nArguments:\n", .{});
+    std.debug.print("  <repo_id>   Hugging Face repository, e.g. owner/model\n", .{});
+    std.debug.print("  [filename]  File to download; if omitted, lists available XET files\n", .{});
+    std.debug.print("\nOptions:\n", .{});
+    std.debug.print("  -h, --help  Show this help message and exit\n", .{});
+    std.debug.print("\nExamples:\n", .{});
+    std.debug.print("  # List files in a repository\n", .{});
+    std.debug.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF\n\n", .{prog});
+    std.debug.print("  # Download a specific file\n", .{});
+    std.debug.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf\n", .{prog});
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
@@ -27,13 +45,15 @@ pub fn main(init: std.process.Init) !void {
         try args.append(allocator, arg);
     }
 
+    if (args.items.len >= 2 and
+        (std.mem.eql(u8, args.items[1], "--help") or std.mem.eql(u8, args.items[1], "-h")))
+    {
+        printUsage(args.items[0]);
+        return;
+    }
+
     if (args.items.len < 2) {
-        std.debug.print("Usage: {s} <repo_id> [filename]\n", .{args.items[0]});
-        std.debug.print("\nExamples:\n", .{});
-        std.debug.print("  # List files in a repository\n", .{});
-        std.debug.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF\n\n", .{args.items[0]});
-        std.debug.print("  # Download a specific file\n", .{});
-        std.debug.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf\n", .{args.items[0]});
+        printUsage(args.items[0]);
         return error.InvalidArgs;
     }
 

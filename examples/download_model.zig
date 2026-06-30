@@ -10,6 +10,7 @@
 //!
 //! Usage:
 //!   HF_TOKEN=your_token zig build run-example-download -- <repo_id> [filename]
+//!   zig build run-example-download -- --help
 //!
 //! Examples:
 //!   # List files in a repository
@@ -20,6 +21,23 @@
 
 const std = @import("std");
 const xet = @import("xet");
+
+fn printUsage(w: *std.Io.Writer, prog: []const u8) !void {
+    try w.print("Usage: {s} <repo_id> [filename]\n", .{prog});
+    try w.print("\n", .{});
+    try w.print("Download a model file from Hugging Face using the XET protocol.\n", .{});
+    try w.print("Requires the HF_TOKEN environment variable to be set.\n", .{});
+    try w.print("\nArguments:\n", .{});
+    try w.print("  <repo_id>   Hugging Face repository, e.g. owner/model\n", .{});
+    try w.print("  [filename]  File to download; if omitted, lists available XET files\n", .{});
+    try w.print("\nOptions:\n", .{});
+    try w.print("  -h, --help  Show this help message and exit\n", .{});
+    try w.print("\nExamples:\n", .{});
+    try w.print("  # List files in a repository\n", .{});
+    try w.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF\n\n", .{prog});
+    try w.print("  # Download a specific file\n", .{});
+    try w.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf\n", .{prog});
+}
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
@@ -42,13 +60,16 @@ pub fn main(init: std.process.Init) !void {
     defer stderr_writer.interface.flush() catch {};
     const stderr = &stderr_writer.interface;
 
+    if (args.items.len >= 2 and
+        (std.mem.eql(u8, args.items[1], "--help") or std.mem.eql(u8, args.items[1], "-h")))
+    {
+        try printUsage(stdout, args.items[0]);
+        try stdout.flush();
+        return;
+    }
+
     if (args.items.len < 2) {
-        try stderr.print("Usage: {s} <repo_id> [filename]\n", .{args.items[0]});
-        try stderr.print("\nExamples:\n", .{});
-        try stderr.print("  # List files in a repository\n", .{});
-        try stderr.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF\n\n", .{args.items[0]});
-        try stderr.print("  # Download a specific file\n", .{});
-        try stderr.print("  HF_TOKEN=hf_xxx {s} jedisct1/MiMo-7B-RL-GGUF MiMo-7B-RL-Q8_0.gguf\n", .{args.items[0]});
+        try printUsage(stderr, args.items[0]);
         try stderr.flush();
         return error.InvalidArgs;
     }
