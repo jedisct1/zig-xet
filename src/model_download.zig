@@ -77,7 +77,26 @@ pub const FileList = struct {
     }
 };
 
-/// List files in a HuggingFace repository
+/// Extract the `rel="next"` URL from an HTTP `Link` header, if present.
+/// The HuggingFace tree endpoint uses this for cursor-based pagination.
+fn parseNextLink(allocator: Allocator, link_header: []const u8) !?[]u8 {
+    var parts = std.mem.splitScalar(u8, link_header, ',');
+    while (parts.next()) |part| {
+        const lt = std.mem.indexOfScalar(u8, part, '<') orelse continue;
+        const gt = std.mem.indexOfScalarPos(u8, part, lt, '>') orelse continue;
+        const url = part[lt + 1 .. gt];
+        if (std.mem.indexOf(u8, part[gt + 1 ..], "rel=\"next\"") != null) {
+            return try allocator.dupe(u8, url);
+        }
+    }
+    return null;
+}
+
+/// List files in a HuggingFace repository.
+///
+/// The listing is recursive, so files nested inside subdirectories are
+/// returned with their full repository path. Results spanning multiple pages
+/// are followed transparently via the `Link` header.
 pub fn listFiles(
     allocator: Allocator,
     io: std.Io,
@@ -90,13 +109,6 @@ pub fn listFiles(
     const token = try OwnedToken.init(allocator, environ, hf_token);
     defer token.deinit();
 
-    const tree_url = try std.fmt.allocPrint(
-        allocator,
-        "https://huggingface.co/api/{s}s/{s}/tree/{s}",
-        .{ repo_type, repo_id, revision },
-    );
-    defer allocator.free(tree_url);
-
     var http_client = std.http.Client{ .allocator = allocator, .io = io };
     defer http_client.deinit();
 
@@ -107,59 +119,77 @@ pub fn listFiles(
         .{ .name = "Authorization", .value = auth_header },
     };
 
-    const uri = try std.Uri.parse(tree_url);
-    var req = try http_client.request(.GET, uri, .{
-        .extra_headers = &extra_headers,
-    });
-    defer req.deinit();
-
-    try req.sendBodiless();
-    var response = try req.receiveHead(&.{});
-
-    if (response.head.status != .ok) {
-        return error.ApiRequestFailed;
-    }
-
-    const body = try cas_client.readBodyDecompressing(&response, allocator, 1024 * 1024);
-    defer allocator.free(body);
-
-    const parsed = try std.json.parseFromSlice(
-        std.json.Value,
-        allocator,
-        body,
-        .{},
-    );
-    defer parsed.deinit();
-
-    const items = parsed.value.array;
     var files: std.ArrayList(FileInfo) = .empty;
     errdefer {
         for (files.items) |*f| f.deinit();
         files.deinit(allocator);
     }
 
-    for (items.items) |item| {
-        const obj = item.object;
-        const file_type = obj.get("type") orelse continue;
-        if (!std.mem.eql(u8, file_type.string, "file")) continue;
+    var next_url: ?[]u8 = try std.fmt.allocPrint(
+        allocator,
+        "https://huggingface.co/api/{s}s/{s}/tree/{s}?recursive=true",
+        .{ repo_type, repo_id, revision },
+    );
 
-        const path_val = obj.get("path") orelse continue;
-        const path = try allocator.dupe(u8, path_val.string);
-        errdefer allocator.free(path);
+    while (next_url) |url| {
+        defer allocator.free(url);
+        next_url = null;
 
-        const size: u64 = if (obj.get("size")) |s| @intCast(s.integer) else 0;
-
-        const xet_hash: ?[]const u8 = if (obj.get("xetHash")) |h|
-            try allocator.dupe(u8, h.string)
-        else
-            null;
-
-        try files.append(allocator, .{
-            .path = path,
-            .size = size,
-            .xet_hash = xet_hash,
-            .allocator = allocator,
+        const uri = try std.Uri.parse(url);
+        var req = try http_client.request(.GET, uri, .{
+            .extra_headers = &extra_headers,
         });
+        defer req.deinit();
+
+        try req.sendBodiless();
+        var response = try req.receiveHead(&.{});
+
+        if (response.head.status != .ok) {
+            return error.ApiRequestFailed;
+        }
+
+        var header_it = response.head.iterateHeaders();
+        while (header_it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "link")) {
+                next_url = try parseNextLink(allocator, header.value);
+                break;
+            }
+        }
+
+        const body = try cas_client.readBodyDecompressing(&response, allocator, 8 * 1024 * 1024);
+        defer allocator.free(body);
+
+        const parsed = try std.json.parseFromSlice(
+            std.json.Value,
+            allocator,
+            body,
+            .{},
+        );
+        defer parsed.deinit();
+
+        for (parsed.value.array.items) |item| {
+            const obj = item.object;
+            const file_type = obj.get("type") orelse continue;
+            if (!std.mem.eql(u8, file_type.string, "file")) continue;
+
+            const path_val = obj.get("path") orelse continue;
+            const path = try allocator.dupe(u8, path_val.string);
+            errdefer allocator.free(path);
+
+            const size: u64 = if (obj.get("size")) |s| @intCast(s.integer) else 0;
+
+            const xet_hash: ?[]const u8 = if (obj.get("xetHash")) |h|
+                try allocator.dupe(u8, h.string)
+            else
+                null;
+
+            try files.append(allocator, .{
+                .path = path,
+                .size = size,
+                .xet_hash = xet_hash,
+                .allocator = allocator,
+            });
+        }
     }
 
     return .{
@@ -206,11 +236,13 @@ pub fn getFileXetHash(
     defer req.deinit();
 
     try req.sendBodiless();
-    _ = try req.receiveHead(&.{ .max_redirects = 0 });
+    var response = try req.receiveHead(&.{ .max_redirects = 0 });
 
-    const xet_hash_header = req.response.iterateHeaders(.{ .name = "x-xet-hash" }).next();
-    if (xet_hash_header) |header| {
-        return try allocator.dupe(u8, header.value);
+    var header_it = response.head.iterateHeaders();
+    while (header_it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "x-xet-hash")) {
+            return try allocator.dupe(u8, header.value);
+        }
     }
 
     return error.NoXetHash;
