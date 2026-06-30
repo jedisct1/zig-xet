@@ -24,6 +24,7 @@
 
 const std = @import("std");
 const xet = @import("xet");
+const xprogress = @import("progress.zig");
 
 fn printUsage(w: *std.Io.Writer, prog: []const u8) !void {
     try w.print("Usage: {s} <repo_id> [filename]\n\n", .{prog});
@@ -53,6 +54,8 @@ fn downloadFile(
     repo_id: []const u8,
     file: xet.model_download.FileInfo,
     output_path: []const u8,
+    index: usize,
+    count: usize,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
@@ -62,19 +65,23 @@ fn downloadFile(
         }
     }
 
+    try stdout.print("[{d}/{d}] Downloading {s} -> {s}\n", .{ index, count, file.path, output_path });
+    try stdout.flush();
+
+    var bar = xprogress.Bar.init(io);
+
     const config = xet.model_download.DownloadConfig{
         .repo_id = repo_id,
         .repo_type = "model",
         .revision = "main",
         .file_hash_hex = file.xet_hash.?,
+        .progress = bar.callback(),
     };
-
-    try stdout.print("Downloading {s} -> {s}\n", .{ file.path, output_path });
-    try stdout.flush();
 
     const start_time = std.Io.Clock.Timestamp.now(io, .boot);
 
     xet.model_download.downloadModelToFile(allocator, io, environ, config, output_path) catch |err| {
+        bar.finish();
         try stderr.print("Error: download of {s} failed: {}\n", .{ file.path, err });
         if (err == error.EnvironmentVariableNotFound) {
             try stderr.print("Make sure HF_TOKEN environment variable is set.\n", .{});
@@ -87,6 +94,7 @@ fn downloadFile(
         try stderr.flush();
         return err;
     };
+    bar.finish();
 
     const elapsed = start_time.untilNow(io);
     const elapsed_ns: i96 = elapsed.raw.nanoseconds;
@@ -196,11 +204,13 @@ pub fn main(init: std.process.Init) !void {
         var downloaded: usize = 0;
         var failed: usize = 0;
         var total_bytes: u64 = 0;
+        var index: usize = 0;
         for (file_list.files) |*file| {
             if (file.xet_hash == null) continue;
+            index += 1;
             const output_path = try std.Io.Dir.path.join(allocator, &.{ model_dir, file.path });
             defer allocator.free(output_path);
-            downloadFile(allocator, io, init.minimal.environ, repo_id, file.*, output_path, stdout, stderr) catch {
+            downloadFile(allocator, io, init.minimal.environ, repo_id, file.*, output_path, index, total_files, stdout, stderr) catch {
                 failed += 1;
                 continue;
             };
@@ -259,7 +269,7 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("===========================\n\n", .{});
     try stdout.print("Repository: {s}\n\n", .{repo_id});
 
-    try downloadFile(allocator, io, init.minimal.environ, repo_id, file, output_path, stdout, stderr);
+    try downloadFile(allocator, io, init.minimal.environ, repo_id, file, output_path, 1, 1, stdout, stderr);
 
     try stdout.print("Output: {s}\n", .{output_path});
     try stdout.flush();

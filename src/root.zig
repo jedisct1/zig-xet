@@ -25,6 +25,9 @@ pub const xorb = @import("xorb.zig");
 pub const shard = @import("shard.zig");
 pub const benchmark = @import("benchmark.zig");
 
+/// Progress reporting callback used by the download/reconstruction APIs.
+pub const progress = @import("progress.zig");
+
 /// Always available, but with limited functionality on WASM (no parallel operations).
 pub const reconstruction = @import("reconstruction.zig");
 

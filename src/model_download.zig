@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const cas_client = @import("cas_client.zig");
 const reconstruction = @import("reconstruction.zig");
+const ProgressCallback = @import("progress.zig").ProgressCallback;
 
 const OwnedToken = struct {
     value: []const u8,
@@ -34,6 +35,8 @@ pub const DownloadConfig = struct {
     file_hash_hex: []const u8,
     /// Hugging Face API token (if null, reads from HF_TOKEN environment variable)
     hf_token: ?[]const u8 = null,
+    /// Optional callback for reporting download progress as bytes are reconstructed
+    progress: ?ProgressCallback = null,
 };
 
 /// Information about a file in a HuggingFace repository
@@ -400,7 +403,7 @@ pub fn downloadModelToWriter(
     defer cas.deinit();
 
     var reconstructor = reconstruction.FileReconstructor.init(allocator, &cas);
-    try reconstructor.reconstructStream(file_hash, writer);
+    try reconstructor.reconstructStream(file_hash, writer, config.progress);
 }
 
 /// Download a model from Hugging Face and write it to a writer using parallel fetching
@@ -439,7 +442,7 @@ pub fn downloadModelToWriterParallel(
     defer cas.deinit();
 
     var reconstructor = reconstruction.FileReconstructor.init(allocator, &cas);
-    try reconstructor.reconstructStreamParallel(file_hash, writer, compute_hashes);
+    try reconstructor.reconstructStreamParallel(file_hash, writer, compute_hashes, config.progress);
 }
 
 /// Download a model from Hugging Face and write it to a file using parallel fetching

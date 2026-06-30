@@ -20,6 +20,7 @@
 
 const std = @import("std");
 const xet = @import("xet");
+const xprogress = @import("progress.zig");
 
 fn printUsage(prog: []const u8) void {
     std.debug.print("Usage: {s} <repo_id> [filename]\n\n", .{prog});
@@ -49,6 +50,8 @@ fn downloadFile(
     repo_id: []const u8,
     file: xet.model_download.FileInfo,
     output_path: []const u8,
+    index: usize,
+    count: usize,
 ) !void {
     if (std.Io.Dir.path.dirname(output_path)) |parent| {
         if (parent.len > 0) {
@@ -56,14 +59,18 @@ fn downloadFile(
         }
     }
 
+    std.debug.print("[{d}/{d}] Downloading {s} -> {s}\n", .{ index, count, file.path, output_path });
+
+    var bar = xprogress.Bar.init(io);
+    errdefer bar.finish();
+
     const config = xet.model_download.DownloadConfig{
         .repo_id = repo_id,
         .repo_type = "model",
         .revision = "main",
         .file_hash_hex = file.xet_hash.?,
+        .progress = bar.callback(),
     };
-
-    std.debug.print("Downloading {s} -> {s}\n", .{ file.path, output_path });
 
     const start_time = std.Io.Clock.Timestamp.now(io, .boot);
 
@@ -75,6 +82,7 @@ fn downloadFile(
         output_path,
         false,
     );
+    bar.finish();
 
     const elapsed = start_time.untilNow(io);
     const duration_ms: i64 = elapsed.raw.toMilliseconds();
@@ -187,10 +195,10 @@ pub fn main(init: std.process.Init) !void {
         var downloaded: usize = 0;
         var failed: usize = 0;
         var total_bytes: u64 = 0;
-        for (xet_files.items) |file| {
+        for (xet_files.items, 0..) |file, i| {
             const output_path = try std.Io.Dir.path.join(allocator, &.{ model_dir, file.path });
             defer allocator.free(output_path);
-            downloadFile(allocator, io, environ, repo_id, file, output_path) catch |err| {
+            downloadFile(allocator, io, environ, repo_id, file, output_path, i + 1, xet_files.items.len) catch |err| {
                 std.debug.print("  Error: download of {s} failed: {}\n", .{ file.path, err });
                 failed += 1;
                 continue;
@@ -239,7 +247,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("\nDownloading with parallel fetching...\n", .{});
     std.debug.print("  Repository: {s}\n\n", .{repo_id});
 
-    try downloadFile(allocator, io, environ, repo_id, file, output_path);
+    try downloadFile(allocator, io, environ, repo_id, file, output_path, 1, 1);
 
     std.debug.print("Output: {s}\n", .{output_path});
 }

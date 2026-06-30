@@ -14,6 +14,8 @@ const Allocator = std.mem.Allocator;
 const xorb = @import("xorb.zig");
 const shard = @import("shard.zig");
 
+const ProgressCallback = @import("progress.zig").ProgressCallback;
+
 const has_network = builtin.target.os.tag != .wasi;
 const cas_client = if (has_network) @import("cas_client.zig") else struct {};
 const parallel_fetcher = if (has_network) @import("parallel_fetcher.zig") else struct {};
@@ -139,14 +141,22 @@ pub const FileReconstructor = if (has_network) struct {
     }
 
     /// Stream reconstruction - reconstruct file and write to writer
+    /// progress: Optional callback invoked after each term is written
     pub fn reconstructStream(
         self: *FileReconstructor,
         file_hash: [32]u8,
         writer: *std.Io.Writer,
+        progress: ?ProgressCallback,
     ) !void {
         var recon = try self.cas.getReconstruction(file_hash, null);
         defer recon.deinit();
 
+        var total: u64 = 0;
+        for (recon.terms) |term| total += term.unpacked_length;
+
+        if (progress) |p| p.report(0, total);
+
+        var completed: u64 = 0;
         for (recon.terms) |term| {
             const xorb_info = try self.fetchXorbForTerm(term, recon.fetch_info);
             defer self.allocator.free(xorb_info.data);
@@ -156,16 +166,21 @@ pub const FileReconstructor = if (has_network) struct {
             defer self.allocator.free(chunk_data);
 
             try writer.writeAll(chunk_data);
+
+            completed += chunk_data.len;
+            if (progress) |p| p.report(completed, total);
         }
     }
 
     /// Parallel stream reconstruction - reconstruct file and write to writer using parallel fetching
     /// compute_hashes: Whether to compute hashes during fetching
+    /// progress: Optional callback invoked as chunks finish fetching
     pub fn reconstructStreamParallel(
         self: *FileReconstructor,
         file_hash: [32]u8,
         writer: *std.Io.Writer,
         compute_hashes: bool,
+        progress: ?ProgressCallback,
     ) !void {
         var recon = try self.cas.getReconstruction(file_hash, null);
         defer recon.deinit();
@@ -177,7 +192,7 @@ pub const FileReconstructor = if (has_network) struct {
             compute_hashes,
         );
 
-        try fetcher.fetchAndWrite(recon.terms, recon.fetch_info, writer);
+        try fetcher.fetchAndWrite(recon.terms, recon.fetch_info, writer, progress);
     }
 } else struct {};
 

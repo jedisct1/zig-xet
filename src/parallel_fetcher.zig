@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const cas_client = @import("cas_client.zig");
 const xorb = @import("xorb.zig");
 const hashing = @import("hashing.zig");
+const ProgressCallback = @import("progress.zig").ProgressCallback;
 
 /// Result of chunk processing
 pub const ChunkResult = struct {
@@ -35,6 +36,10 @@ const ChunkFetchContext = struct {
     error_occurred: *std.atomic.Value(bool),
     first_error: *?anyerror,
     error_mutex: *std.Io.Mutex,
+    progress: ?ProgressCallback,
+    completed_bytes: *std.atomic.Value(u64),
+    total_bytes: u64,
+    progress_mutex: *std.Io.Mutex,
 };
 
 /// Fetch data from a presigned URL
@@ -90,9 +95,19 @@ fn processChunk(ctx: *ChunkFetchContext) void {
         return;
     };
 
-    ctx.mutex.lockUncancelable(ctx.io);
-    defer ctx.mutex.unlock(ctx.io);
-    ctx.results[ctx.index] = result;
+    const chunk_len = result.data.len;
+    {
+        ctx.mutex.lockUncancelable(ctx.io);
+        defer ctx.mutex.unlock(ctx.io);
+        ctx.results[ctx.index] = result;
+    }
+
+    if (ctx.progress) |p| {
+        _ = ctx.completed_bytes.fetchAdd(chunk_len, .monotonic);
+        ctx.progress_mutex.lockUncancelable(ctx.io);
+        defer ctx.progress_mutex.unlock(ctx.io);
+        p.report(ctx.completed_bytes.load(.monotonic), ctx.total_bytes);
+    }
 }
 
 fn processChunkInner(ctx: *ChunkFetchContext) !ChunkResult {
@@ -152,10 +167,12 @@ pub const ParallelFetcher = struct {
     }
 
     /// Fetch all chunks in parallel and return results in order
+    /// progress: Optional callback invoked as chunks finish fetching
     pub fn fetchAll(
         self: *ParallelFetcher,
         terms: []cas_client.ReconstructionTerm,
         fetch_info_map: std.StringHashMap([]cas_client.FetchInfo),
+        progress: ?ProgressCallback,
     ) ![]ChunkResult {
         if (terms.len == 0) {
             return &[_]ChunkResult{};
@@ -169,6 +186,12 @@ pub const ParallelFetcher = struct {
         var error_occurred = std.atomic.Value(bool).init(false);
         var first_error: ?anyerror = null;
         var error_mutex: std.Io.Mutex = .init;
+
+        var total_bytes: u64 = 0;
+        for (terms) |term| total_bytes += term.unpacked_length;
+        var completed_bytes = std.atomic.Value(u64).init(0);
+        var progress_mutex: std.Io.Mutex = .init;
+        if (progress) |p| p.report(0, total_bytes);
 
         const contexts = try self.allocator.alloc(ChunkFetchContext, terms.len);
         defer self.allocator.free(contexts);
@@ -192,6 +215,10 @@ pub const ParallelFetcher = struct {
                 .error_occurred = &error_occurred,
                 .first_error = &first_error,
                 .error_mutex = &error_mutex,
+                .progress = progress,
+                .completed_bytes = &completed_bytes,
+                .total_bytes = total_bytes,
+                .progress_mutex = &progress_mutex,
             };
         }
 
@@ -233,13 +260,15 @@ pub const ParallelFetcher = struct {
     }
 
     /// Fetch all chunks and write directly to writer
+    /// progress: Optional callback invoked as chunks finish fetching
     pub fn fetchAndWrite(
         self: *ParallelFetcher,
         terms: []cas_client.ReconstructionTerm,
         fetch_info_map: std.StringHashMap([]cas_client.FetchInfo),
         writer: *std.Io.Writer,
+        progress: ?ProgressCallback,
     ) !void {
-        const results = try self.fetchAll(terms, fetch_info_map);
+        const results = try self.fetchAll(terms, fetch_info_map, progress);
         defer {
             for (results) |*result| result.deinit();
             self.allocator.free(results);
