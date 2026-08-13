@@ -11,6 +11,7 @@
 //! - xorb: Xorb format serialization/deserialization
 //! - shard: MDB shard format I/O
 //! - cas_client: HTTP CAS API client (not available on WASM)
+//! - http_proxy: HTTP client with proxy support (not available on WASM)
 //! - reconstruction: File reconstruction from terms (limited on WASM - no parallel operations)
 //! - model_download: High-level API for downloading models from Hugging Face (not available on WASM)
 
@@ -35,6 +36,7 @@ pub const reconstruction = @import("reconstruction.zig");
 pub const has_network_support = builtin.target.os.tag != .wasi;
 
 pub const cas_client = if (has_network_support) @import("cas_client.zig") else struct {};
+pub const http_proxy = if (has_network_support) @import("http_proxy.zig") else struct {};
 pub const model_download = if (has_network_support) @import("model_download.zig") else struct {};
 pub const parallel_fetcher = if (has_network_support) @import("parallel_fetcher.zig") else struct {};
 pub const upload = if (has_network_support) @import("upload.zig") else struct {};

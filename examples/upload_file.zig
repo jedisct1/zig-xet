@@ -4,6 +4,7 @@ const xet = @import("xet");
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
+    const environ = init.minimal.environ;
 
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
     var args: std.ArrayList([]const u8) = .empty;
@@ -92,7 +93,7 @@ pub fn main(init: std.process.Init) !void {
     const bucket = bucket_id.?;
     const remote = remote_path orelse std.Io.Dir.path.basename(path);
 
-    const hf_token = std.process.Environ.getAlloc(init.minimal.environ, allocator, "HF_TOKEN") catch {
+    const hf_token = std.process.Environ.getAlloc(environ, allocator, "HF_TOKEN") catch {
         try stderr.print("Error: HF_TOKEN environment variable not set.\n", .{});
         try stderr.print("Get a token at: https://huggingface.co/settings/tokens\n", .{});
         return error.EnvironmentVariableNotFound;
@@ -134,14 +135,14 @@ pub fn main(init: std.process.Init) !void {
 
     try stdout.print("Ensuring bucket exists...\n", .{});
     try stdout.flush();
-    xet.bucket_api.ensureBucket(allocator, io, bucket, hf_token) catch |err| {
+    xet.bucket_api.ensureBucket(allocator, io, environ, bucket, hf_token) catch |err| {
         try stderr.print("Error: Failed to ensure bucket: {}\n", .{err});
         return err;
     };
 
     try stdout.print("Requesting write token...\n", .{});
     try stdout.flush();
-    var connection = xet.bucket_api.getXetToken(allocator, io, bucket, hf_token, "write") catch |err| {
+    var connection = xet.bucket_api.getXetToken(allocator, io, environ, bucket, hf_token, "write") catch |err| {
         try stderr.print("Error: Failed to get write token: {}\n", .{err});
         return err;
     };
@@ -150,7 +151,7 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("Uploading data (chunking, compressing, uploading)...\n", .{});
     try stdout.flush();
 
-    var cas = try xet.cas_client.CasClient.init(allocator, io, connection.cas_url, connection.access_token);
+    var cas = try xet.cas_client.CasClient.init(allocator, io, environ, connection.cas_url, connection.access_token);
     defer cas.deinit();
 
     const result = xet.upload.uploadDataWithOptions(allocator, &cas, file_data, compression_type, chunking_algorithm) catch |err| {
@@ -160,7 +161,7 @@ pub fn main(init: std.process.Init) !void {
 
     try stdout.print("Registering file in bucket...\n", .{});
     try stdout.flush();
-    xet.bucket_api.registerFile(allocator, io, bucket, hf_token, remote, &result.file_hash_hex) catch |err| {
+    xet.bucket_api.registerFile(allocator, io, environ, bucket, hf_token, remote, &result.file_hash_hex) catch |err| {
         try stderr.print("Error: Failed to register file: {}\n", .{err});
         return err;
     };

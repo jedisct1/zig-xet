@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const cas_client = @import("cas_client.zig");
+const http_proxy = @import("http_proxy.zig");
 const reconstruction = @import("reconstruction.zig");
 const ProgressCallback = @import("progress.zig").ProgressCallback;
 
@@ -112,7 +113,7 @@ pub fn listFiles(
     const token = try OwnedToken.init(allocator, environ, hf_token);
     defer token.deinit();
 
-    var http_client = std.http.Client{ .allocator = allocator, .io = io };
+    var http_client = try http_proxy.Client.init(allocator, io, environ);
     defer http_client.deinit();
 
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token.value});
@@ -222,7 +223,7 @@ pub fn getFileXetHash(
     );
     defer allocator.free(resolve_url);
 
-    var http_client = std.http.Client{ .allocator = allocator, .io = io };
+    var http_client = try http_proxy.Client.init(allocator, io, environ);
     defer http_client.deinit();
 
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token.value});
@@ -267,6 +268,7 @@ const XetTokenResult = struct {
 fn requestXetToken(
     allocator: Allocator,
     io: std.Io,
+    environ: std.process.Environ,
     config: DownloadConfig,
     hf_token: []const u8,
 ) !XetTokenResult {
@@ -277,7 +279,7 @@ fn requestXetToken(
     );
     defer allocator.free(token_url);
 
-    var http_client = std.http.Client{ .allocator = allocator, .io = io };
+    var http_client = try http_proxy.Client.init(allocator, io, environ);
     defer http_client.deinit();
 
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{hf_token});
@@ -389,7 +391,7 @@ pub fn downloadModelToWriter(
     const hf_token = try OwnedToken.init(allocator, environ, config.hf_token);
     defer hf_token.deinit();
 
-    var xet_token = try requestXetToken(allocator, io, config, hf_token.value);
+    var xet_token = try requestXetToken(allocator, io, environ, config, hf_token.value);
     defer xet_token.deinit();
 
     const file_hash = try cas_client.apiHexToHash(config.file_hash_hex);
@@ -397,6 +399,7 @@ pub fn downloadModelToWriter(
     var cas = try cas_client.CasClient.init(
         allocator,
         io,
+        environ,
         xet_token.cas_url,
         xet_token.access_token,
     );
@@ -428,7 +431,7 @@ pub fn downloadModelToWriterParallel(
     const hf_token = try OwnedToken.init(allocator, environ, config.hf_token);
     defer hf_token.deinit();
 
-    var xet_token = try requestXetToken(allocator, io, config, hf_token.value);
+    var xet_token = try requestXetToken(allocator, io, environ, config, hf_token.value);
     defer xet_token.deinit();
 
     const file_hash = try cas_client.apiHexToHash(config.file_hash_hex);
@@ -436,6 +439,7 @@ pub fn downloadModelToWriterParallel(
     var cas = try cas_client.CasClient.init(
         allocator,
         io,
+        environ,
         xet_token.cas_url,
         xet_token.access_token,
     );
@@ -506,7 +510,7 @@ pub fn downloadModel(
     const hf_token = try OwnedToken.init(allocator, environ, config.hf_token);
     defer hf_token.deinit();
 
-    var xet_token = try requestXetToken(allocator, io, config, hf_token.value);
+    var xet_token = try requestXetToken(allocator, io, environ, config, hf_token.value);
     defer xet_token.deinit();
 
     const file_hash = try cas_client.apiHexToHash(config.file_hash_hex);
@@ -514,6 +518,7 @@ pub fn downloadModel(
     var cas = try cas_client.CasClient.init(
         allocator,
         io,
+        environ,
         xet_token.cas_url,
         xet_token.access_token,
     );

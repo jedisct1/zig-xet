@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const http_proxy = @import("http_proxy.zig");
 
 pub const HF_ENDPOINT = "https://huggingface.co";
 
@@ -37,6 +38,7 @@ pub const BucketFileMetadata = struct {
 pub fn ensureBucket(
     allocator: Allocator,
     io: std.Io,
+    environ: std.process.Environ,
     bucket_id: []const u8,
     hf_token: []const u8,
 ) !void {
@@ -53,7 +55,7 @@ pub fn ensureBucket(
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{hf_token});
     defer allocator.free(auth_header);
 
-    var http_client = std.http.Client{ .allocator = allocator, .io = io };
+    var http_client = try http_proxy.Client.init(allocator, io, environ);
     defer http_client.deinit();
 
     const uri = try std.Uri.parse(url);
@@ -84,6 +86,7 @@ pub fn ensureBucket(
 pub fn getXetToken(
     allocator: Allocator,
     io: std.Io,
+    environ: std.process.Environ,
     bucket_id: []const u8,
     hf_token: []const u8,
     token_type: []const u8,
@@ -98,7 +101,7 @@ pub fn getXetToken(
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{hf_token});
     defer allocator.free(auth_header);
 
-    var http_client = std.http.Client{ .allocator = allocator, .io = io };
+    var http_client = try http_proxy.Client.init(allocator, io, environ);
     defer http_client.deinit();
 
     const uri = try std.Uri.parse(url);
@@ -138,6 +141,7 @@ pub fn getXetToken(
 pub fn getFileMetadata(
     allocator: Allocator,
     io: std.Io,
+    environ: std.process.Environ,
     bucket_id: []const u8,
     hf_token: []const u8,
     remote_path: []const u8,
@@ -152,7 +156,7 @@ pub fn getFileMetadata(
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{hf_token});
     defer allocator.free(auth_header);
 
-    var http_client = std.http.Client{ .allocator = allocator, .io = io };
+    var http_client = try http_proxy.Client.init(allocator, io, environ);
     defer http_client.deinit();
 
     const uri = try std.Uri.parse(url);
@@ -193,6 +197,7 @@ pub fn getFileMetadata(
 pub fn registerFile(
     allocator: Allocator,
     io: std.Io,
+    environ: std.process.Environ,
     bucket_id: []const u8,
     hf_token: []const u8,
     remote_path: []const u8,
@@ -208,7 +213,7 @@ pub fn registerFile(
     const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{hf_token});
     defer allocator.free(auth_header);
 
-    var http_client = std.http.Client{ .allocator = allocator, .io = io };
+    var http_client = try http_proxy.Client.init(allocator, io, environ);
     defer http_client.deinit();
 
     const uri = try std.Uri.parse(url);

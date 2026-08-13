@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const hashing = @import("hashing.zig");
+const http_proxy = @import("http_proxy.zig");
 
 /// Read a full HTTP response body, transparently decompressing gzip/deflate.
 ///
@@ -248,14 +249,25 @@ pub const CasClient = struct {
     allocator: Allocator,
     cas_url: []const u8,
     access_token: []const u8,
-    http_client: std.http.Client,
+    http_client: http_proxy.Client,
 
-    pub fn init(allocator: Allocator, io: std.Io, cas_url: []const u8, access_token: []const u8) !CasClient {
+    pub fn init(
+        allocator: Allocator,
+        io: std.Io,
+        environ: std.process.Environ,
+        cas_url: []const u8,
+        access_token: []const u8,
+    ) !CasClient {
+        const cas_url_owned = try allocator.dupe(u8, cas_url);
+        errdefer allocator.free(cas_url_owned);
+        const access_token_owned = try allocator.dupe(u8, access_token);
+        errdefer allocator.free(access_token_owned);
+
         return CasClient{
             .allocator = allocator,
-            .cas_url = try allocator.dupe(u8, cas_url),
-            .access_token = try allocator.dupe(u8, access_token),
-            .http_client = std.http.Client{ .allocator = allocator, .io = io },
+            .cas_url = cas_url_owned,
+            .access_token = access_token_owned,
+            .http_client = try http_proxy.Client.init(allocator, io, environ),
         };
     }
 
@@ -363,7 +375,7 @@ pub const CasClient = struct {
         var reader = response.reader(&.{});
         // Use 80 MB limit to allow for protocol overhead while still protecting against excessive memory usage
         // The protocol specifies 64 MiB max for content, but we need headroom for HTTP headers/overhead
-        const shard_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024));
+        const shard_data = try reader.allocRemaining(self.allocator, .limited(80 * 1024 * 1024));
         return shard_data;
     }
 
@@ -411,7 +423,7 @@ pub const CasClient = struct {
         }
 
         var reader = response.reader(&.{});
-        const body = try reader.allocRemaining(self.allocator, @enumFromInt(1024));
+        const body = try reader.allocRemaining(self.allocator, .limited(1024));
         defer self.allocator.free(body);
 
         const parsed = try std.json.parseFromSlice(
@@ -466,7 +478,7 @@ pub const CasClient = struct {
         var reader = response.reader(&.{});
         // Use 80 MB limit to allow for protocol overhead while still protecting against excessive memory usage
         // The protocol specifies 64 MiB max for Xorb content, but we need headroom for HTTP headers/overhead
-        const xorb_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024));
+        const xorb_data = try reader.allocRemaining(self.allocator, .limited(80 * 1024 * 1024));
         return xorb_data;
     }
 
@@ -511,7 +523,7 @@ pub const CasClient = struct {
         var reader = response.reader(&.{});
         // Use 80 MB limit to allow for protocol overhead while still protecting against excessive memory usage
         // The protocol specifies 64 MiB max for Xorb content, but we need headroom for HTTP headers/overhead
-        const xorb_data = try reader.allocRemaining(self.allocator, @enumFromInt(80 * 1024 * 1024));
+        const xorb_data = try reader.allocRemaining(self.allocator, .limited(80 * 1024 * 1024));
         return xorb_data;
     }
 
@@ -555,7 +567,7 @@ pub const CasClient = struct {
         }
 
         var reader = response.reader(&.{});
-        const body = try reader.allocRemaining(self.allocator, @enumFromInt(1024));
+        const body = try reader.allocRemaining(self.allocator, .limited(1024));
         defer self.allocator.free(body);
 
         const parsed = try std.json.parseFromSlice(

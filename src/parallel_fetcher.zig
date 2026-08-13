@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const cas_client = @import("cas_client.zig");
+const http_proxy = @import("http_proxy.zig");
 const xorb = @import("xorb.zig");
 const hashing = @import("hashing.zig");
 const ProgressCallback = @import("progress.zig").ProgressCallback;
@@ -26,7 +27,7 @@ pub const ChunkResult = struct {
 const ChunkFetchContext = struct {
     allocator: Allocator,
     io: std.Io,
-    http_client: *std.http.Client,
+    http_client: *http_proxy.Client,
     term: cas_client.ReconstructionTerm,
     fetch_info: []cas_client.FetchInfo,
     index: usize,
@@ -45,7 +46,7 @@ const ChunkFetchContext = struct {
 /// Fetch data from a presigned URL
 fn fetchFromUrl(
     allocator: Allocator,
-    http_client: *std.http.Client,
+    http_client: *http_proxy.Client,
     url: []const u8,
     byte_range: ?struct { start: u64, end: u64 },
 ) ![]u8 {
@@ -77,7 +78,7 @@ fn fetchFromUrl(
     }
 
     var reader = response.reader(&.{});
-    return try reader.allocRemaining(allocator, @enumFromInt(128 * 1024 * 1024));
+    return try reader.allocRemaining(allocator, .limited(128 * 1024 * 1024));
 }
 
 /// Process a single chunk - called concurrently via Io.Group
@@ -149,18 +150,17 @@ fn processChunkInner(ctx: *ChunkFetchContext) !ChunkResult {
 pub const ParallelFetcher = struct {
     allocator: Allocator,
     io: std.Io,
-    http_client: *std.http.Client,
+    http_client: *http_proxy.Client,
     compute_hashes: bool,
 
     pub fn init(
         allocator: Allocator,
-        io: std.Io,
-        http_client: *std.http.Client,
+        http_client: *http_proxy.Client,
         compute_hashes: bool,
     ) ParallelFetcher {
         return .{
             .allocator = allocator,
-            .io = io,
+            .io = http_client.io,
             .http_client = http_client,
             .compute_hashes = compute_hashes,
         };
